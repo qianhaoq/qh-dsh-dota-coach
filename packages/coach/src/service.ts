@@ -544,7 +544,12 @@ export class CoachService {
         async (taskSignal): Promise<RecordValue> => {
           const learned = this.store.setting(`learned:${record.id}`)
           if (learned) return { ok: true, candidate: true, deduplicated: true, result: learned }
-          const result = await this.memory!.request('learn', { record }, exec, taskSignal)
+          const result = await this.memory!.request(
+            'learn',
+            { record: this.store.learningContext(String(record.id)) },
+            exec,
+            taskSignal,
+          )
           this.store.setting(`learned:${record.id}`, result)
           return { ok: true, candidate: true, basis: 'grounded_review_and_user_report', result }
         },

@@ -278,7 +278,7 @@ export class CoachStore {
         title: text,
         body: text,
         learner_explanation: text,
-        evidence_ids: z.array(text).min(1),
+        evidence_ids: z.array(text).min(1).max(20),
         trigger: text,
         action_rule: text,
         check_method: text,
@@ -288,6 +288,8 @@ export class CoachStore {
     if (input.to < input.from) throw new CoachError('invalid_arguments', 'to must be >= from')
     for (const id of input.evidence_ids) {
       const e = this.get(id)
+      if (e.kind === 'evidence' && e.match_id !== input.match_id)
+        throw new CoachError('invalid_evidence', 'Match evidence belongs to a different match')
       if (e.kind !== 'source' && e.kind !== 'evidence')
         throw new CoachError(
           'invalid_evidence',
@@ -309,6 +311,31 @@ export class CoachStore {
       })
       return { ok: true, record: review, training }
     })
+  }
+  /** Give auxiliary learning readable evidence, not opaque IDs alone. */
+  learningContext(id: string): RecordValue {
+    const review = this.get(id, 'review')
+    const ids = review.evidence_ids as string[]
+    const budget = Math.floor(24000 / ids.length)
+    const evidence = ids.map((id) => {
+      const row = this.get(id)
+      const text = typeof row.body === 'string' ? row.body : JSON.stringify(row.body)
+      return {
+        id,
+        content_hash: row.content_hash ?? null,
+        source: row.source ?? row.origin ?? 'unknown',
+        locator: row.locator ?? row.window ?? null,
+        captured_at: row.captured_at ?? row.created_at ?? null,
+        patch: row.patch ?? 'unknown',
+        excerpt: text.slice(0, budget),
+        excerpt_truncated: text.length > budget,
+      }
+    })
+    return {
+      ...review,
+      evidence,
+      training: this.training({ action: 'create', review_id: id }).record!,
+    }
   }
   training(args: RecordValue): RecordValue {
     const action = String(args.action || 'list')
@@ -362,8 +389,9 @@ export class CoachStore {
         window,
         body,
         content_hash: hash(content),
-        source: 'opendota+local_trace',
-        captured_at: now(),
+        source: body.source ?? 'unknown',
+        captured_at: body.captured_at ?? now(),
+        snapshot_at: now(),
       })
       this.db.prepare('INSERT INTO dedupe VALUES(?,?)').run(key, String(row.id))
       return row
