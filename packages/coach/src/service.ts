@@ -30,6 +30,14 @@ export function seconds(v: Json | undefined, fallback: number): number {
   }
   throw new CoachError('invalid_arguments', 'Time must be seconds or mm:ss')
 }
+/** Source 2 uses zero for living entities; do not expose it as a false boolean. */
+export function heroLifeState(value: unknown): {
+  life_state: number | null
+  alive: boolean | null
+} {
+  const state = typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+  return { life_state: state, alive: state === null ? null : state === 0 }
+}
 export class CoachService {
   readonly tasks = new Tasks()
   readonly store: CoachStore
@@ -400,7 +408,7 @@ export class CoachService {
             last.set(key, t)
             return true
           })
-          .map((s) => ({ ...s, t: Number(s.t) - offset }))
+          .map((s) => ({ ...s, ...heroLifeState(s.alive), t: Number(s.t) - offset }))
       } else if (a.action === 'wards')
         rows = trace.wards
           .map((w) => ({ ...w, t: Number(w.t) - offset }))

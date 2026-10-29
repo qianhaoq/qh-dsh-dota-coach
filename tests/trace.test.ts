@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import * as shape from '../packages/coach/src/legacy/shape.mjs'
+import { heroLifeState } from '../packages/coach/src/service.ts'
 const match = JSON.parse(
   await readFile(new URL('../packages/coach/fixtures/match.json', import.meta.url), 'utf8'),
 )
@@ -11,6 +12,11 @@ const objectives = JSON.parse(
     'utf8',
   ),
 )
+test('public hero life state distinguishes alive, dead and unknown', () => {
+  assert.deepEqual(heroLifeState(0), { life_state: 0, alive: true })
+  assert.deepEqual(heroLifeState(2), { life_state: 2, alive: false })
+  assert.deepEqual(heroLifeState(null), { life_state: null, alive: null })
+})
 test('calibration pairs the same building and requires three anchors, ratio and residual', () => {
   const good = shape.calibrateOffset(objectives, match)
   assert.equal(good.ok, true)
