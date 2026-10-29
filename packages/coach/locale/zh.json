@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "title": "Dota2 教练",
+    "description": "OpenDota 整局面板、录像下载与本地轨迹（manta），以及带戳的教练语料库。"
+  },
+  "status": {
+    "token": "加载 Dota2 数据层"
+  }
+}

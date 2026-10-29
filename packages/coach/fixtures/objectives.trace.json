@@ -1,0 +1,17 @@
+[
+  {
+    "t": 160,
+    "building_id": "npc_dota_goodguys_tower1_mid",
+    "what": "CDOTA_BaseNPC_Tower"
+  },
+  {
+    "t": 200,
+    "building_id": "npc_dota_badguys_tower1_top",
+    "what": "CDOTA_BaseNPC_Tower"
+  },
+  {
+    "t": 280,
+    "building_id": "npc_dota_badguys_tower1_bot",
+    "what": "CDOTA_BaseNPC_Tower"
+  }
+]

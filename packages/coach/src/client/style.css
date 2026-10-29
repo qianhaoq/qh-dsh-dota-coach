@@ -1,0 +1,275 @@
+.dota-coach {
+  height: 100%;
+  overflow: auto;
+  color: var(--dsw-alias-label-primary, #e8ebed);
+  background: var(--dsw-alias-bg-base, #14191d);
+  font:
+    14px/1.6 system-ui,
+    sans-serif;
+  padding: 32px clamp(20px, 4vw, 56px);
+  box-sizing: border-box;
+}
+.dota-coach * {
+  box-sizing: border-box;
+}
+.dota-coach header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1200px;
+  margin: auto;
+}
+.dota-coach h1 {
+  font-size: 32px;
+  letter-spacing: -1px;
+  margin: 3px 0;
+}
+.dota-coach h2 {
+  font-size: 16px;
+  margin: 0 0 14px;
+}
+.dota-coach p,
+.dota-coach small {
+  opacity: 0.7;
+}
+.dota-eyebrow {
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #c38466;
+  font-size: 11px;
+  font-weight: 700;
+}
+.dota-emblem {
+  font-size: 64px;
+  color: #be7054;
+}
+.dota-coach nav {
+  display: flex;
+  gap: 24px;
+  max-width: 1200px;
+  margin: 20px auto 28px;
+  border-bottom: 1px solid #8883;
+}
+.dota-coach nav button {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 12px 4px;
+  opacity: 0.6;
+}
+.dota-coach nav button[aria-selected='true'] {
+  opacity: 1;
+  border-bottom: 2px solid #cd896d;
+  color: #cd896d;
+}
+.dota-coach main {
+  max-width: 1200px;
+  margin: auto;
+}
+.dota-card {
+  border: 1px solid #8883;
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-elevated, #ffffff03);
+  padding: 22px;
+  margin-bottom: 20px;
+  min-width: 0;
+}
+.dota-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.dota-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.dota-coach button,
+.dota-coach input,
+.dota-coach select,
+.dota-coach textarea {
+  font: inherit;
+  color: inherit;
+  border: 1px solid #8884;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base, #171e23);
+  padding: 8px 12px;
+  max-width: 100%;
+}
+.dota-coach button {
+  cursor: pointer;
+  background: var(--dsw-alias-bg-elevated, #293138);
+  transition: border-color 0.15s;
+}
+.dota-coach button:hover {
+  border-color: #cd896d;
+}
+.dota-coach button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.dota-coach button:focus-visible,
+.dota-coach input:focus-visible,
+.dota-coach textarea:focus-visible,
+.dota-coach select:focus-visible {
+  outline: 2px solid #cd896d;
+  outline-offset: 2px;
+}
+.dota-coach label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  opacity: 0.9;
+  margin-bottom: 12px;
+}
+.dota-coach label.dota-row {
+  flex-direction: row;
+}
+.dota-coach textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 90px;
+}
+.dota-coach form > button {
+  margin-top: 12px;
+}
+.dota-coach form .dota-grid {
+  gap: 12px;
+}
+.dota-match-list {
+  margin-top: 16px;
+}
+.dota-match {
+  display: grid;
+  grid-template-columns: 1.4fr 0.4fr 0.6fr 0.6fr 1fr;
+  gap: 16px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+}
+.dota-win {
+  color: #68cba5;
+}
+.dota-loss {
+  color: #e68b7c;
+}
+.dota-empty {
+  text-align: center;
+  padding: 48px 24px;
+  opacity: 0.55;
+  border: 1px dashed #8883;
+  border-radius: 8px;
+}
+.dota-error,
+.dota-notice,
+.dota-loading {
+  max-width: 1200px;
+  margin: 12px auto;
+  padding: 12px 16px;
+  border-radius: 6px;
+  background: #b64d3325;
+  overflow-wrap: anywhere;
+}
+.dota-notice {
+  background: #43a57d22;
+}
+.dota-loading {
+  background: #7771;
+}
+.dota-events {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 450px;
+  overflow: auto;
+}
+.dota-events li {
+  display: grid;
+  grid-template-columns: 55px 80px 1fr 1fr;
+  gap: 16px;
+  border-top: 1px solid #8882;
+  padding: 12px 0;
+}
+.dota-events time {
+  color: #cd896d;
+  font-variant-numeric: tabular-nums;
+}
+.dota-coach svg {
+  width: 100%;
+  max-height: 220px;
+}
+.dota-map {
+  max-width: 240px;
+  display: block;
+  margin: 0 auto 12px;
+}
+.dota-knowledge-list > button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 10px;
+}
+.dota-knowledge-list small {
+  display: block;
+}
+.dota-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  max-height: 700px;
+  overflow: auto;
+}
+.dota-coach dd {
+  margin: 3px 0 16px;
+}
+.dota-coach dt {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.dota-tool-card {
+  border: 1px solid #8884;
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.dota-tool-card pre {
+  max-height: 200px;
+  overflow: auto;
+  width: 100%;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+.dota-tool-card button {
+  cursor: pointer;
+  background: none;
+  color: inherit;
+  border: 1px solid #8885;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+@media (max-width: 800px) {
+  .dota-grid {
+    grid-template-columns: 1fr;
+  }
+  .dota-match {
+    grid-template-columns: 1fr 45px 1fr;
+  }
+  .dota-match small {
+    grid-column: 1/-1;
+  }
+  .dota-events li {
+    grid-template-columns: 45px 65px 1fr;
+  }
+  .dota-events small {
+    display: none;
+  }
+  .dota-coach {
+    padding: 20px;
+  }
+}

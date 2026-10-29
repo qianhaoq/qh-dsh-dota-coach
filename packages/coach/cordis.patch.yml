@@ -1,0 +1,6 @@
+- insert:
+    - id: dota-coach
+      name: '@qianhaoq/dsh-dota-coach'
+      config:
+        enabled: true
+        accountId: 0

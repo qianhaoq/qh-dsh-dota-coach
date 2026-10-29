@@ -1,0 +1,93 @@
+name: Verify and package
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live_match_id:
+        description: 'Optional public parsed match with an available replay; release smoke only'
+        type: string
+        required: false
+permissions:
+  contents: read
+jobs:
+  platform:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: windows-2022
+            target: windows-x64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.3
+          cache-dependency-path: packages/coach/go/go.sum
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: go test ./...
+        working-directory: packages/coach/go
+      - run: pnpm pack:release
+      - name: Clean DSH installation and shipped parser
+        run: pnpm exec tsx scripts/installed-smoke.ts dist/qh-dsh-dota-coach-0.1.0-${{ matrix.target }}.tgz
+      - name: Optional live OpenDota and replay acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.live_match_id != ''
+        env:
+          DOTA_SMOKE_MATCH_ID: ${{ inputs.live_match_id }}
+        run: pnpm test:smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+  browser:
+    needs: platform
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:ui
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux-x64
+          path: dist
+      - name: Install release for full host browser acceptance
+        env:
+          DOTA_KEEP_SMOKE_HOME: ${{ runner.temp }}/dota-home.path
+        run: pnpm exec tsx scripts/installed-smoke.ts dist/qh-dsh-dota-coach-0.1.0-linux-x64.tgz
+      - name: Full DSH client acceptance
+        env:
+          DOTA_KEEP_SMOKE_HOME: ${{ runner.temp }}/dota-home.path
+        run: pnpm exec tsx scripts/host-browser-smoke.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure
+          path: test-results
+          retention-days: 3

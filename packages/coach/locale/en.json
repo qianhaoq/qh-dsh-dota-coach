@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "title": "Dota2 coach",
+    "description": "OpenDota match panels, replay download and local manta traces for Dota2 coaching, plus a dated coach corpus."
+  },
+  "status": {
+    "token": "loads the Dota2 data layer"
+  }
+}

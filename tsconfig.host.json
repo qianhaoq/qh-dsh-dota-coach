@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/coach/tsconfig.host.json"
+    }
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+**/lib/
+packages/coach/bin/*
+!packages/coach/bin/.gitkeep
+dist/
+.playwright/
+test-results/
+*.db*
+*.dem*
+*.part*
+.env*
+.DS_Store
+.generated/
+packages/.reflection-sdk/
+!packages/coach/fixtures/tiny.dem
+!packages/coach/fixtures/tiny.dem.bz2

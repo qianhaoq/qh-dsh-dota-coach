@@ -1,0 +1,7 @@
+node_modules
+**/lib
+packages/.reflection-sdk
+.generated
+dist
+packages/coach/fixtures
+pnpm-lock.yaml

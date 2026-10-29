@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "declaration": true,
+    "allowJs": true,
+    "checkJs": false,
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable"
+    ]
+  },
+  "include": [
+    "src/client/**/*",
+    "src/types.ts"
+  ],
+  "exclude": [
+    "src/index.ts",
+    "src/store.ts",
+    "src/service.ts",
+    "src/http.ts",
+    "src/replay.ts",
+    "src/tasks.ts",
+    "src/config.ts",
+    "src/legacy"
+  ]
+}
