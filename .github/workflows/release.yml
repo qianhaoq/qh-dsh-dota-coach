@@ -1,0 +1,63 @@
+name: Publish verified release
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Successful Verify and package run ID'
+        required: true
+        type: string
+      tag:
+        description: 'Release tag, matching the built package version'
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source run
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > run.json
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.status == "completed" and .conclusion == "success" and .name == "Verify and package" and .head_repository.full_name == $repo and (.event == "push" or .event == "workflow_dispatch")' run.json
+          sha=$(jq -r .head_sha run.json)
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
+          echo "SOURCE_SHA=$sha" >> "$GITHUB_ENV"
+          test -s ".github/release-notes/$TAG.md"
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          pattern: release-*
+          path: incoming
+      - name: Verify checksums and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=${TAG#v}
+          mkdir release
+          for target in linux-x64 windows-x64 darwin-arm64 darwin-x64; do
+            dir="incoming/release-$target"
+            (cd "$dir" && sha256sum -c "SHA256SUMS-$target")
+            archive="qh-dsh-dota-coach-$version-$target.tgz"
+            actual=$(tar -xOf "$dir/$archive" package/package.json | jq -r .version)
+            test "$actual" = "$version"
+            cp "$dir/$archive" release/
+            binary="dota-extract-$target"
+            if [[ "$target" = windows-x64 ]]; then binary="$binary.exe"; fi
+            cp "$dir/$binary" release/
+            cat "$dir/SHA256SUMS-$target" >> release/SHA256SUMS
+          done
+          (cd release && sha256sum -c SHA256SUMS)
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$TAG — DSH Dota coach" --notes-file ".github/release-notes/$TAG.md"
