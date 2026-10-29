@@ -13,8 +13,11 @@ import assert from 'node:assert/strict'
 const require = createRequire(import.meta.url)
 const manifestFile = require.resolve('@deepseek-ai/dsh/package.json')
 const cli = join(dirname(manifestFile), JSON.parse(await readFile(manifestFile, 'utf8')).bin.dsh)
-const archive = resolve(process.argv[2] || '')
-if (!process.argv[2]) throw new Error('Pass a release .tgz')
+const version = JSON.parse(await readFile('packages/coach/package.json', 'utf8')).version
+const platform = process.platform === 'win32' ? 'windows' : process.platform
+const archive = resolve(
+  process.argv[2] || `dist/qh-dsh-dota-coach-${version}-${platform}-${process.arch}.tgz`,
+)
 const home = await mkdtemp(join(tmpdir(), 'dota-installed-'))
 let fiber: ReturnType<Context['plugin']> | undefined
 try {

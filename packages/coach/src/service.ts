@@ -234,8 +234,12 @@ export class CoachService {
       ])
       return json({
         ok: true,
-        source: 'opendota',
-        captured_at: new Date().toISOString(),
+        ...this.od.provenance('/heroStats'),
+        sources: [
+          { dataset: 'heroStats', ...this.od.provenance('/heroStats') },
+          { dataset: 'matchups', ...this.od.provenance(`/heroes/${hero.id}/matchups`) },
+          { dataset: 'itemPopularity', ...this.od.provenance(`/heroes/${hero.id}/itemPopularity`) },
+        ],
         patch: 'unknown',
         ...S.heroBrief({
           hero,

@@ -145,3 +145,29 @@ test('serialized concurrent writes and stale projection acknowledgements preserv
   assert.equal(s.projectionRecord('old-trace'), null)
   assert.ok(Number(s.projectionState().pending) > 0)
 })
+
+test('an old review still resolves its single goal beyond the list page limit', async (t) => {
+  const s = await setup(t)
+  const source = record(s.source(material))
+  let first: RecordValue | undefined
+  for (let i = 0; i < 205; i++) {
+    const saved = s.review({
+      action: 'save',
+      match_id: 424242,
+      from: 100,
+      to: 140,
+      title: `Practice ${i}`,
+      body: 'An evidence-linked review.',
+      learner_explanation: 'I checked the map.',
+      evidence_ids: [source.id!],
+      trigger: 'Before crossing',
+      action_rule: 'Check the map',
+      check_method: 'Inspect the next match',
+    })
+    first ||= record(saved)
+  }
+  const result = record(s.training({ action: 'create', review_id: first!.id! }))
+  assert.equal(result.review_id, first!.id)
+  assert.equal((s.learningContext(String(first!.id)).training as RecordValue).id, result.id)
+  assert.equal(result.title, 'Practice 0')
+})

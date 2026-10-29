@@ -342,7 +342,12 @@ export class CoachStore {
     if (action === 'list') return { ok: true, items: this.list('training', args) }
     if (action === 'create') {
       const review = this.get(required(args.review_id, 'review_id'), 'review')
-      const old = this.list('training', { limit: 200 }).find((t) => t.review_id === review.id)
+      const saved = this.db
+        .prepare(
+          "SELECT data FROM records WHERE kind='training' AND json_extract(data,'$.review_id')=? LIMIT 1",
+        )
+        .get(String(review.id))
+      const old = saved ? (JSON.parse(String(saved.data)) as RecordValue) : undefined
       if (old) return { ok: true, deduplicated: true, record: old }
       throw new CoachError('invalid_arguments', 'Save a review to create its single training goal')
     }

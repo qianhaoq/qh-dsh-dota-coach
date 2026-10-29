@@ -2,7 +2,7 @@
 
 Release baseline: Node 24.22.1 and the published DSH 0.2.1-rc.3 SDK/CLI. The Go toolchain is 1.27.3. No local DSH source checkout is used by build or acceptance scripts.
 
-- `pnpm check`: strict Host and Client type checking; 22 tests covering real Cordis/Tools/Skill/Typert registration and reload, schema validation, Native/PTC value transport, real MemOS worker/model route, evidence storage and migrations, HTTP failures, task cancellation, calibration and entity filtering. The PTC unit test uses a fixture runtime to isolate transport; it does not claim a full production sandbox test.
+- `pnpm check`: strict Host and Client type checking; 24 tests covering real Cordis/Tools/Skill/Typert registration and reload, schema validation, Native/PTC value transport, real MemOS worker/model route, evidence storage and migrations, HTTP failures, task cancellation, calibration and entity filtering. The PTC unit test uses a fixture runtime to isolate transport; it does not claim a full production sandbox test.
 - `go test ./...`: entity identity classification and dem/bz2/zstd container handling, corruption and size limits.
 - `pnpm test:ui`: four browser flows against the actual React panel and domain service, using synthetic OpenDota/trace fixtures. Covers empty states, unavailable replay/source provider, synchronized window, review → one goal → checkin, source import/read and host English/Chinese dictionaries.
 - `scripts/installed-smoke.ts`: installs the actual platform archive through the public DSH CLI into a new profile, invokes shipped tools and MemOS, reloads, and parses the handcrafted Stop demo with the shipped binary.

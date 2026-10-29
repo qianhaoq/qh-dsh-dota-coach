@@ -46,7 +46,7 @@ jobs:
         working-directory: packages/coach/go
       - run: pnpm pack:release
       - name: Clean DSH installation and shipped parser
-        run: pnpm exec tsx scripts/installed-smoke.ts dist/qh-dsh-dota-coach-0.1.0-${{ matrix.target }}.tgz
+        run: pnpm exec tsx scripts/installed-smoke.ts
       - name: Optional live OpenDota and replay acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.live_match_id != ''
         env:
@@ -80,7 +80,7 @@ jobs:
       - name: Install release for full host browser acceptance
         env:
           DOTA_KEEP_SMOKE_HOME: ${{ runner.temp }}/dota-home.path
-        run: pnpm exec tsx scripts/installed-smoke.ts dist/qh-dsh-dota-coach-0.1.0-linux-x64.tgz
+        run: pnpm exec tsx scripts/installed-smoke.ts
       - name: Full DSH client acceptance
         env:
           DOTA_KEEP_SMOKE_HOME: ${{ runner.temp }}/dota-home.path

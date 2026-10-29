@@ -1,6 +1,6 @@
 {
   "name": "@qianhaoq/dsh-dota-coach",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Evidence-based local Dota 2 coaching for DSH",
   "license": "MIT",

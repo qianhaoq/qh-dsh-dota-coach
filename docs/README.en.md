@@ -9,7 +9,7 @@ The conversation tools and four embedded tabs share one Host domain service. DSH
 Requires Node ≥24.9 and the tested DSH baseline 0.2.1-rc.3. Download the platform `.tgz` and verify `SHA256SUMS` from [Releases](https://github.com/qianhaoq/qh-dsh-dota-coach/releases), then run:
 
 ```sh
-dsh plugin --profile web add ./qh-dsh-dota-coach-0.1.0-linux-x64.tgz
+dsh plugin --profile web add ./qh-dsh-dota-coach-0.1.1-linux-x64.tgz
 ```
 
 Targets: Linux x64, Windows x64, macOS arm64 and macOS x64 (`darwin` in filenames). Packages include built code, runtime dependencies and the native replay extractor. End users do not need Go, a database server or system decompression tools.

@@ -26,7 +26,7 @@
 从 [Releases](https://github.com/qianhaoq/qh-dsh-dota-coach/releases) 下载对应平台的插件包及 `SHA256SUMS`，核对校验和后安装：
 
 ```sh
-dsh plugin --profile web add ./qh-dsh-dota-coach-0.1.0-linux-x64.tgz
+dsh plugin --profile web add ./qh-dsh-dota-coach-0.1.1-linux-x64.tgz
 ```
 
 支持目标：Linux x64、Windows x64、macOS arm64 和 macOS x64。平台包自带构建产物、运行依赖和 Go 提取器；普通使用不需要 Go、数据库服务、系统 bz2/zstd 工具或源码编译。macOS 的平台标识为 `darwin`。

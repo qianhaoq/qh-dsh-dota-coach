@@ -5,7 +5,7 @@ Evidence-linked Dota 2 post-match coaching with local MemOS knowledge, replay ex
 需要 Node ≥24.9 和 DSH 0.2.1-rc.3。安装匹配平台的包：
 
 ```sh
-dsh plugin --profile web add ./qh-dsh-dota-coach-0.1.0-linux-x64.tgz
+dsh plugin --profile web add ./qh-dsh-dota-coach-0.1.1-linux-x64.tgz
 ```
 
 Open **Dota coach / Dota 教练** in the DSH sidebar. Enter an OpenDota account ID or a match ID. Runtime dependencies and the platform extractor are included; no Go build or database service is required. Data defaults to `$DSH_HOME/dota-coach` (`~/.dsh/dota-coach`).

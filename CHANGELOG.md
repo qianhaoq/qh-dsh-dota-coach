@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Preserve original collection times separately for cached hero statistics, matchups and item popularity.
+- Retrieve a review's training goal directly by its link, including records older than the 200-item list page.
+- Make release installation acceptance infer the current package version.
+
 ## 0.1.0
 
 - Evidence-linked source, knowledge, review and training records in SQLite with idempotent legacy backup/import.
