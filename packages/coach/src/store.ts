@@ -6,9 +6,10 @@ import {
   readdirSync,
   copyFileSync,
   existsSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 import { z } from 'zod'
 import { CoachError, required } from './errors.ts'
 import type { Json, RecordValue } from './types.ts'
@@ -27,11 +28,14 @@ const sourceInput = z.object({
 })
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
 const now = () => new Date().toISOString()
+const kbKind = z.enum(['principle', 'fact', 'counterexample'])
+const stampPattern = /\[([^\]\n·]+)·([^\]\n·]+)·([^\]\n·]+)\]/
 /** Synchronous transactions serialize writes in one Host; WAL/busy_timeout cover other processes. */
 export class CoachStore {
   readonly db: DatabaseSync
   constructor(readonly home: string) {
     mkdirSync(home, { recursive: true, mode: 0o700 })
+    this.ensurePatchScaffold()
     this.db = new DatabaseSync(join(home, 'coach.sqlite'))
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`)
     const v = Number(this.db.prepare('PRAGMA user_version').get()?.user_version)
@@ -47,6 +51,276 @@ export class CoachStore {
   }
   close(): void {
     if (this.db.isOpen) this.db.close()
+  }
+  ensurePatchScaffold(): string {
+    const path = join(this.home, 'patch')
+    mkdirSync(path, { recursive: true, mode: 0o700 })
+    return path
+  }
+  private kbFtsReady(): boolean {
+    return Boolean(
+      this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE name='search' AND sql LIKE '%fts5%'")
+        .get(),
+    )
+  }
+  kbStatus(): RecordValue {
+    return {
+      ok: true,
+      home: this.home,
+      paths: {
+        database: join(this.home, 'coach.sqlite'),
+        principles: join(this.home, 'principles.md'),
+        library: join(this.home, 'library.md'),
+        patch: join(this.home, 'patch'),
+      },
+      fts_ready: this.kbFtsReady(),
+      principles_exists: existsSync(join(this.home, 'principles.md')),
+      library_exists: existsSync(join(this.home, 'library.md')),
+      patch_exists: existsSync(join(this.home, 'patch')),
+      notes_by_kind: Object.fromEntries(
+        this.db
+          .prepare(
+            "SELECT json_extract(data,'$.category') AS category,COUNT(*) AS n FROM records WHERE kind='note' GROUP BY category",
+          )
+          .all()
+          .map((r) => [String(r.category), Number(r.n)]),
+      ),
+    }
+  }
+  /** Read Markdown as-is; indexing/migration must not replace the editable source. */
+  private kbMarkdown(file: string): RecordValue[] {
+    if (
+      isAbsolute(file) ||
+      file.split('/').some((p) => !p || p === '.' || p === '..') ||
+      !(['principles.md', 'library.md'].includes(file) || /^patch\/.+\.md$/i.test(file))
+    )
+      throw new CoachError('invalid_arguments', 'Use principles.md, library.md or patch/.../*.md')
+    const path = join(this.home, file)
+    if (!existsSync(path))
+      throw new CoachError('not_found', 'Markdown file not found', { path: file })
+    const actual = relative(realpathSync(this.home), realpathSync(path))
+    if (actual === '..' || actual.startsWith('../') || isAbsolute(actual))
+      throw new CoachError('invalid_arguments', 'Knowledge path must remain under data home')
+    const content = readFileSync(path, 'utf8')
+    // Ignore headings inside fenced examples, and ignore root-file preambles.
+    const sections: string[] = []
+    let lines: string[] = [],
+      fence = ''
+    for (const line of content.split('\n')) {
+      const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/)?.[1]
+      if (!fence && /^##\s+/.test(line)) {
+        if (lines.length) sections.push(lines.join('\n').trim())
+        lines = []
+      }
+      if (lines.length || (!fence && /^##\s+/.test(line))) lines.push(line)
+      if (marker && !fence) fence = marker
+      else if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = ''
+    }
+    if (lines.length) sections.push(lines.join('\n').trim())
+    if (!sections.length && file.startsWith('patch/') && content.trim())
+      sections.push(content.trim())
+    const slugs = new Map<string, number>()
+    return sections.map((body) => {
+      const title = body.match(/^##\s+(.+)/)?.[1]?.trim() || file
+      const slug =
+        title
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+          .replace(/\s+/g, '-') || 'section'
+      const duplicate = slugs.get(slug) || 0
+      slugs.set(slug, duplicate + 1)
+      const path = `${file}#${slug}${duplicate ? `-${duplicate}` : ''}`
+      const field = (name: string) =>
+        body.match(new RegExp(`^(?:[-*]\\s*)?${name}\\s*[:：]\\s*(.+)$`, 'im'))?.[1]?.trim()
+      const stamp = body.match(stampPattern)
+      const category =
+        file === 'principles.md'
+          ? 'principle'
+          : /counterexample|反例/i.test(title) || field('kind') === 'counterexample'
+            ? 'counterexample'
+            : 'fact'
+      const evidenceLevel = field('evidence_level')
+      return {
+        id: `md:${path}`,
+        path,
+        title,
+        body,
+        category,
+        stamp: stamp?.[0] ?? null,
+        patch: stamp?.[1]?.trim() || file.match(/^patch\/([^/]+)\//)?.[1] || 'unknown',
+        hero: field('hero') || '',
+        source_id: field('source_id') || stamp?.[3]?.trim() || null,
+        source_record_id: field('source_record_id') || null,
+        evidence_level:
+          evidenceLevel &&
+          ['subtitle_full', 'frames_checked', 'title_only', 'post_body', 'comments_only'].includes(
+            evidenceLevel,
+          )
+            ? evidenceLevel
+            : null,
+        evidence_status: 'unverified_legacy',
+        needs_recheck: category !== 'principle',
+      }
+    })
+  }
+  private kbMarkdownEntries(): RecordValue[] {
+    const files = ['principles.md', 'library.md'].filter((f) => existsSync(join(this.home, f)))
+    const walk = (dir: string) => {
+      if (!existsSync(join(this.home, dir))) return
+      for (const entry of readdirSync(join(this.home, dir), { withFileTypes: true })) {
+        const file = `${dir}/${entry.name}`
+        if (entry.isDirectory()) walk(file)
+        else if (entry.isFile() && /\.md$/i.test(file)) files.push(file)
+      }
+    }
+    walk('patch')
+    return files.flatMap((file) => this.kbMarkdown(file))
+  }
+  private kbHit(r: RecordValue, query = '', current?: Json): RecordValue {
+    const body = String(r.body || ''),
+      terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    const at = Math.min(
+      ...terms.map((term) => body.toLowerCase().indexOf(term)).filter((i) => i >= 0),
+    )
+    const start = Number.isFinite(at) ? Math.max(0, at - 100) : 0
+    const stamp =
+      typeof r.stamp === 'string' && r.stamp.match(stampPattern)?.[0] === r.stamp ? r.stamp : null
+    const source = r.source_record_id ? this.getOptional(String(r.source_record_id)) : undefined
+    const applied = this.applicability(r, current)
+    return {
+      id: r.id!,
+      kind: r.category || 'fact',
+      title: r.title || '',
+      stamp,
+      stamp_status: stamp ? 'present' : 'missing',
+      source_id: r.source_id ?? null,
+      source_record_id: r.source_record_id ?? null,
+      evidence_refs:
+        source?.kind === 'source'
+          ? [
+              {
+                id: source.id!,
+                source_id: source.source_id ?? null,
+                locator: source.locator ?? null,
+                content_hash: source.content_hash ?? null,
+                evidence_level: source.evidence_level ?? null,
+              },
+            ]
+          : r.source_record_id
+            ? [{ id: r.source_record_id }]
+            : [],
+      evidence_level: r.evidence_level ?? null,
+      evidence_status: r.evidence_status || 'unverified_legacy',
+      verification: r.verification || 'unverified_legacy',
+      needs_recheck: Boolean(
+        applied.needs_recheck ||
+          (!stamp && r.category !== 'principle') ||
+          ['title_only', 'comments_only'].includes(String(r.evidence_level)),
+      ),
+      applicability: applied.applicability!,
+      patch: r.patch || 'unknown',
+      hero: r.hero || '',
+      path: r.path ?? null,
+      snippet:
+        (start ? '…' : '') +
+        body.slice(start, start + 320) +
+        (body.length > start + 320 ? '…' : ''),
+    }
+  }
+  kbSearch(args: RecordValue): RecordValue {
+    const input = z
+      .object({
+        query: text,
+        hero: text.optional(),
+        patch: text.optional(),
+        kind: kbKind.optional(),
+        limit: z.number().int().min(1).max(200).default(10),
+        current_patch: text.optional(),
+      })
+      .parse(args)
+    const terms = input.query.toLowerCase().split(/\s+/)
+    const markdown = this.kbMarkdownEntries()
+    // FTS is an acceleration only; short tokens and an absent index use a note scan.
+    const rows =
+      this.kbFtsReady() && terms.every((term) => [...term].length >= 3)
+        ? this.db
+            .prepare(
+              "SELECT r.data FROM records r JOIN search s ON r.id=s.id WHERE r.kind='note' AND search MATCH ? ORDER BY bm25(search)",
+            )
+            .all(terms.map((t) => '"' + t.replaceAll('"', '""') + '"').join(' OR '))
+        : this.db
+            .prepare("SELECT data FROM records WHERE kind='note' ORDER BY updated_at DESC")
+            .all()
+    const duplicates = new Set(
+      markdown.map((r) => `${String(r.path).split('#')[0]}:${hash(String(r.body).trim())}`),
+    )
+    const notes = rows
+      .map((r) => JSON.parse(String(r.data)) as RecordValue)
+      .filter(
+        (r) => !r.legacy_file || !duplicates.has(`${r.legacy_file}:${hash(String(r.body).trim())}`),
+      )
+    const hits = [...markdown, ...notes]
+      .flatMap((r) => {
+        const content = JSON.stringify(r).toLowerCase()
+        const matched = terms.filter((term) => content.includes(term))
+        if (!matched.length || (input.kind && r.category !== input.kind)) return []
+        if (
+          input.hero &&
+          ![r.hero, r.title, r.body, r.path]
+            .join(' ')
+            .toLowerCase()
+            .includes(input.hero.toLowerCase())
+        )
+          return []
+        if (input.patch && r.patch !== input.patch) return []
+        const hit = this.kbHit(r, input.query, input.current_patch ?? input.patch)
+        const score =
+          (r.category === 'principle' ? 100 : 0) +
+          (hit.stamp ? 20 : 0) +
+          (matched.length / terms.length) * 10 +
+          (matched.some((t) => String(r.title).toLowerCase().includes(t)) ? 5 : 0)
+        return [{ ...hit, score }]
+      })
+      .sort((a, b) => b.score - a.score)
+    return { ok: true, items: hits.slice(0, input.limit) }
+  }
+  kbGet(args: RecordValue): RecordValue {
+    const input = z
+      .object({
+        id: text.optional(),
+        path: text.optional(),
+        current_patch: text.optional(),
+        offset: z.number().int().nonnegative().default(0),
+        max_chars: z.number().int().min(1).max(20000).default(12000),
+      })
+      .parse(args)
+    if (Boolean(input.id) === Boolean(input.path))
+      throw new CoachError('invalid_arguments', 'Provide exactly one of id or path')
+    let row: RecordValue
+    if (input.path || input.id?.startsWith('md:')) {
+      const path = input.path || input.id!.slice(3),
+        [file, fragment] = path.split('#')
+      const sections = this.kbMarkdown(file!)
+      if (!fragment)
+        return {
+          ok: true,
+          path,
+          items: sections.map((r) => this.kbHit(r, '', input.current_patch)),
+        }
+      const found = sections.find((r) => r.path === path)
+      if (!found) throw new CoachError('not_found', 'Markdown section not found', { path })
+      row = found
+    } else row = this.get(input.id!, 'note')
+    const body = String(row.body || ''),
+      end = Math.min(body.length, input.offset + input.max_chars)
+    return {
+      ok: true,
+      record: { ...this.kbHit(row, '', input.current_patch), body: body.slice(input.offset, end) },
+      body_total_chars: body.length,
+      offset: input.offset,
+      next_offset: end < body.length ? end : null,
+    }
   }
   transaction<T>(f: () => T): T {
     if (this.db.isTransaction) return f()

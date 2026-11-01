@@ -186,9 +186,26 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
         ...filter,
       },
     },
+    dota_kb: {
+      description:
+        'Read local knowledge from Markdown and SQLite notes without MemOS or network access. Search ranks stable principles before stamped patch facts; a stamp is not independent verification. Get a note/section by id, or a relative Markdown path (optionally #section). Cite stamp, evidence refs and applicability before coaching. Write with dota_coach_note.',
+      parameters: {
+        action: { ...enumeration('search', 'get', 'status'), required: true },
+        query: string,
+        hero: string,
+        patch: string,
+        kind: enumeration('principle', 'fact', 'counterexample'),
+        limit: number,
+        id: string,
+        path: string,
+        current_patch: string,
+        offset: number,
+        max_chars: number,
+      },
+    },
     dota_coach_note: {
       description:
-        'Append, search, read or flag knowledge for recheck. Requires a readable source_record_id. Principles, patch facts and counterexamples remain distinct.',
+        'Append, revise or flag knowledge for recheck; legacy search/get remain supported. Use dota_kb for unified knowledge reads. Writes require a readable source_record_id. Principles, patch facts and counterexamples remain distinct.',
       parameters: {
         action: enumeration('append', 'list', 'search', 'get', 'recheck', 'revise'),
         kind: enumeration('principle', 'fact', 'counterexample'),

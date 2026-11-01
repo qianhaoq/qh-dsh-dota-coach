@@ -103,7 +103,7 @@ export class CoachService {
           )
           if (value.ok) return value
         }
-        return this.store.note({ action: 'search', query: query.split(' ')[0], limit: 4 })
+        return this.store.kbSearch({ query, limit: 4 })
       },
     )
   }
@@ -242,6 +242,12 @@ export class CoachService {
       }
     }
     if (name === 'dota_memory') return this.memoryTool(a, signal, exec)
+    if (name === 'dota_kb') {
+      if (a.action === 'search') return this.store.kbSearch(a)
+      if (a.action === 'get') return this.store.kbGet(a)
+      if (a.action === 'status') return this.store.kbStatus()
+      throw new CoachError('invalid_arguments', 'Use search/get/status for dota_kb')
+    }
     if (name === 'dota_source')
       return a.action === 'fetch' ? this.fetchSource(a, signal, exec) : this.store.source(a)
     if (name === 'dota_coach_note') {

@@ -53,16 +53,20 @@ async function invoke(ctx: Context, name: string, args: unknown, parent?: ToolRu
     ...(parent ? { parent } : {}),
   })
 }
-test('all 13 official tools register, title remains a parameter, defaults are plain config fields and reload cleans up', async (t) => {
-  const { ctx, fiber } = await mounted(t)
+test('all 14 official tools register, title remains a parameter, defaults are plain config fields and reload cleans up', async (t) => {
+  const { ctx, fiber, home } = await mounted(t)
   assert.ok(await ctx.skills.get('dota2-coach'))
+  assert.ok(ctx.tools.get('dota_kb'))
   for (const name of toolNames) {
     const definition = ctx.tools.get(name)!
     assert.ok(definition)
     assert.equal(definition.parameters.type, 'object')
     assert.ok(definition.output?.schema)
   }
-  assert.ok(JSON.stringify(ctx.tools.get('dota_coach')!.parameters).includes('presentation'), 'the host registry admits presentation actions')
+  assert.ok(
+    JSON.stringify(ctx.tools.get('dota_coach')!.parameters).includes('presentation'),
+    'the host registry admits presentation actions',
+  )
   const result = await invoke(ctx, 'dota_source', {
     action: 'import',
     source_id: 'user:fixture',
@@ -76,6 +80,12 @@ test('all 13 official tools register, title remains a parameter, defaults are pl
   const manifest = JSON.parse(await readFile('packages/coach/package.json', 'utf8'))
   assert.equal((status.value as { version: string }).version, manifest.version)
   assert.ok(!JSON.stringify(status).includes('TEST_SECRET'))
+  const kb = await invoke(ctx, 'dota_kb', { action: 'status' })
+  assert.equal(kb.isError, false)
+  assert.equal((kb.value as { home: string }).home, home)
+  assert.equal((kb.value as { fts_ready: boolean }).fts_ready, true)
+  assert.equal((kb.value as { patch_exists: boolean }).patch_exists, true)
+  assert.equal((await invoke(ctx, 'dota_kb', { action: 'invented' })).isError, true)
   assert.ok(!JSON.stringify(Config({ homeDir: 'fixture' })).includes('[object Object]'))
   await fiber.restart()
   assert.equal((await invoke(ctx, 'dota_status', {})).isError, false)
@@ -122,6 +132,18 @@ test('model-facing schemas keep title in properties across reload and accept a t
   assert.equal(note.isError, false)
   assert.equal((note.value as { ok: boolean }).ok, true, JSON.stringify(note.value))
   assert.equal((note.value as { record: { title: string } }).record.title, args.title)
+  const noteId = (note.value as { record: { id: string } }).record.id
+  const found = await invoke(ctx, 'dota_kb', {
+    action: 'search',
+    query: 'allied',
+    kind: 'principle',
+  })
+  assert.equal(found.isError, false)
+  assert.equal((found.value as { items: { id: string; kind: string }[] }).items[0]!.id, noteId)
+  assert.equal((found.value as { items: { kind: string }[] }).items[0]!.kind, 'principle')
+  const kbNote = await invoke(ctx, 'dota_kb', { action: 'get', id: noteId })
+  assert.equal(kbNote.isError, false)
+  assert.equal((kbNote.value as { record: { body: string } }).record.body, args.body)
   assert.equal((await invoke(ctx, 'dota_coach_note', { ...args, title: 123 })).isError, true)
   await fiber.restart()
   checkSchemas()

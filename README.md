@@ -66,6 +66,7 @@ dsh plugin --profile web add ./qh-dsh-dota-coach-0.6.3-linux-x64.tgz
 | `dota_hero`                    | 带采集时间的公开英雄统计；不推断克制原因                       |
 | `dota_replay`                  | 下载、校验、解压、检查、列出和删除录像                         |
 | `dota_source`                  | `fetch/import/list/get`：正文、定位和哈希                      |
+| `dota_kb`                      | `search/get/status`：Markdown + SQLite 本地知识、stamp 与适用性 |
 | `dota_coach_note`              | `append/list/search/get/recheck/revise`：证据关联知识与修订    |
 | `dota_review`                  | `save/list/get`：窗口、学员解释、证据和唯一训练规则            |
 | `dota_training`                | `create/get/list/update/checkin`：目标与用户自报执行情况       |
@@ -106,7 +107,7 @@ pnpm pack:release
 
 可选联网验证：`pnpm exec tsx scripts/semantic-smoke.ts` 会下载本地模型并验证中文语义检索。完整录像与 OpenDota 发布前 smoke 使用 `DOTA_SMOKE_MATCH_ID=<公开且已解析的对局> pnpm test:smoke`；可额外设置 `DOTA_SMOKE_DEMO` 指向本地录像。日常 CI 仅使用自建脱敏 fixtures。手动工作流传入 `live_match_id` 可在四个平台验证真实下载和解析，录像不会作为构建产物上传。
 
-旧 `library.md`、`principles.md` 和 `coach-log.jsonl` 首次启动时备份并导入；重复运行不重复记账，无法核实的内容标为待验证。SQLite 是新记录的权威存储，Markdown 是阅读与导出格式。
+旧 `library.md`、`principles.md` 和 `coach-log.jsonl` 首次启动时备份并导入；重复运行不重复记账，无法核实的内容标为待验证。`dota_kb` 同时直接读取当前 Markdown，SQLite 保存工具写入的记录与可选检索索引；版本资料目录约定见 [package README](packages/coach/README.md)。
 
 见 [架构与知识治理](docs/architecture.zh-CN.md)、[贡献指南](CONTRIBUTING.md)、[变更记录](CHANGELOG.md) 和 [第三方声明](packages/coach/NOTICE)。
 

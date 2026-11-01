@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readdir, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CoachStore } from '../packages/coach/src/store.ts'
@@ -36,6 +36,181 @@ function note(source: RecordValue): RecordValue {
     tags: ['vision'],
   }
 }
+test('KB status reports local paths, note counts and FTS without inventing patch knowledge', async (t) => {
+  const s = await setup(t)
+  const status = s.kbStatus()
+  assert.equal(status.home, s.home)
+  assert.deepEqual(status.paths, {
+    database: join(s.home, 'coach.sqlite'),
+    principles: join(s.home, 'principles.md'),
+    library: join(s.home, 'library.md'),
+    patch: join(s.home, 'patch'),
+  })
+  assert.equal(status.fts_ready, true)
+  assert.equal(status.principles_exists, false)
+  assert.equal(status.library_exists, false)
+  assert.equal(status.patch_exists, true)
+  assert.deepEqual(await readdir(join(s.home, 'patch')), [])
+  assert.deepEqual(status.notes_by_kind, {})
+  s.note(note(record(s.source(material))))
+  assert.deepEqual(s.kbStatus().notes_by_kind, { fact: 1 })
+  await rm(join(s.home, 'patch'), { recursive: true })
+  assert.equal(s.kbStatus().patch_exists, false)
+  s.ensurePatchScaffold()
+  s.ensurePatchScaffold()
+  assert.equal(s.kbStatus().patch_exists, true)
+  s.db.exec('DROP TABLE search')
+  assert.equal(s.kbStatus().fts_ready, false)
+  assert.equal((s.kbSearch({ query: 'vision' }).items as RecordValue[]).length, 1)
+  await writeFile(
+    join(s.home, 'principles.md'),
+    '## Fixture principle\nA Markdown fixture without an index.\n',
+  )
+  assert.equal((s.kbSearch({ query: 'Markdown' }).items as RecordValue[])[0]!.kind, 'principle')
+})
+test('KB ranks current Markdown principles, stamped library facts and linked notes with evidence metadata', async (t) => {
+  const s = await setup(t)
+  await writeFile(
+    join(s.home, 'principles.md'),
+    '# Fixture principles\n\n## Vision principle\n\nCheck vision before moving.\n\n```md\n## Example inside a fence\n```\n',
+  )
+  await writeFile(
+    join(s.home, 'library.md'),
+    '# Fixture library\n\n## Axe vision fixture\n[7.41f · 2026-10-30 · user:fixture]\nhero: axe\nevidence_level: post_body\n\n' +
+      'Fixture vision material. '.repeat(40) +
+      '\n\n## Unstamped vision fixture\nhero: axe\nAn old claim without a source stamp.\n\n## Vision counterexample\n[7.40 · 2026-10-29 · user:fixture]\nA fixture counterexample.\n',
+  )
+  const source = record(s.source(material))
+  const saved = record(s.note({ ...note(source), hero: 'axe' }))
+  const hits = s.kbSearch({ query: 'vision' }).items as RecordValue[]
+  assert.equal(hits.length, 5)
+  assert.equal(hits[0]!.kind, 'principle')
+  assert.ok(!hits.some((r) => r.title === 'Example inside a fence'))
+  const library = hits.find((r) => r.title === 'Axe vision fixture')!
+  assert.equal(library.path, 'library.md#axe-vision-fixture')
+  assert.equal(library.stamp, '[7.41f · 2026-10-30 · user:fixture]')
+  assert.equal(library.source_id, 'user:fixture')
+  assert.equal(library.evidence_level, 'post_body')
+  assert.equal(library.verification, 'unverified_legacy', 'a stamp is not independent verification')
+  assert.ok(hits.every((r) => String(r.snippet).length <= 322 && r.body === undefined))
+  const unstamped = hits.find((r) => r.title === 'Unstamped vision fixture')!
+  assert.equal(unstamped.stamp, null)
+  assert.equal(unstamped.stamp_status, 'missing')
+  assert.equal(unstamped.needs_recheck, true)
+  assert.equal(unstamped.evidence_status, 'unverified_legacy')
+  assert.ok(hits.indexOf(library) < hits.indexOf(unstamped))
+  const linked = hits.find((r) => r.id === saved.id)!
+  assert.equal(linked.kind, 'fact')
+  assert.equal(linked.source_record_id, source.id)
+  assert.deepEqual(linked.evidence_refs, [
+    {
+      id: source.id,
+      source_id: source.source_id,
+      locator: source.locator,
+      content_hash: source.content_hash,
+      evidence_level: null,
+    },
+  ])
+  assert.equal(linked.evidence_status, 'supported_by_material')
+  const selected = s.kbSearch({
+    query: 'VISION',
+    hero: 'AXE',
+    patch: '7.41f',
+    kind: 'fact',
+    limit: 1,
+  }).items as RecordValue[]
+  assert.equal(selected.length, 1)
+  assert.equal(selected[0]!.kind, 'fact')
+  assert.equal(selected[0]!.applicability, 'patch_matches')
+  assert.deepEqual(s.kbSearch({ query: 'vision', hero: 'missing-hero' }).items, [])
+  assert.equal(
+    (s.kbSearch({ query: 'vision', kind: 'counterexample' }).items as RecordValue[])[0]!.title,
+    'Vision counterexample',
+  )
+  const fetched = record(s.kbGet({ id: saved.id!, current_patch: '7.42' }))
+  assert.equal(fetched.id, saved.id)
+  assert.equal(fetched.body, saved.body)
+  assert.equal(fetched.applicability, 'outdated')
+  assert.equal(fetched.needs_recheck, true)
+  assert.deepEqual(fetched.evidence_refs, linked.evidence_refs)
+  assert.equal(s.kbStatus().principles_exists, true)
+  assert.equal(s.kbStatus().library_exists, true)
+})
+test('KB gets bounded Markdown sections and patch files, reads edits immediately, and deduplicates legacy sections', async (t) => {
+  const s = await setup(t)
+  await writeFile(
+    join(s.home, 'principles.md'),
+    '# Fixtures\n\n## 地图意识\n小地图观察 fixture.\n\n## 地图意识\nSecond fixture.\n',
+  )
+  s.migrate()
+  const hits = s.kbSearch({ query: '小地' }).items as RecordValue[]
+  assert.equal(hits.length, 1, 'the live Markdown section and its migrated copy are one hit')
+  assert.equal(hits[0]!.kind, 'principle')
+  const page = s.kbGet({ path: 'principles.md' })
+  assert.equal((page.items as RecordValue[]).length, 2)
+  assert.ok((page.items as RecordValue[]).every((r) => !r.body))
+  const first = record(s.kbGet({ id: hits[0]!.id!, max_chars: 7 }))
+  const full = record(s.kbGet({ path: hits[0]!.path! }))
+  assert.equal(first.body, String(full.body).slice(0, 7))
+  assert.equal(s.kbGet({ id: hits[0]!.id!, max_chars: 7 }).next_offset, 7)
+  assert.equal(record(s.kbGet({ id: hits[0]!.id!, offset: 7 })).body, String(full.body).slice(7))
+  assert.notEqual((page.items as RecordValue[])[0]!.id, (page.items as RecordValue[])[1]!.id)
+  await writeFile(join(s.home, 'principles.md'), '## Edited fixture\nUpdated knowledge fixture.\n')
+  assert.equal(
+    (s.kbSearch({ query: 'Updated' }).items as RecordValue[])[0]!.title,
+    'Edited fixture',
+  )
+  const patchDir = join(s.home, 'patch/test-version/heroes/test-hero')
+  await mkdir(patchDir, { recursive: true })
+  await writeFile(join(patchDir, 'fixture.md'), '# Fixture only\nPatch reading fixture.\n')
+  const patch = (
+    s.kbSearch({ query: 'reading', patch: 'test-version', hero: 'test-hero' })
+      .items as RecordValue[]
+  )[0]!
+  assert.equal(patch.kind, 'fact')
+  assert.equal(patch.stamp_status, 'missing')
+  assert.equal(patch.needs_recheck, true)
+  assert.equal(record(s.kbGet({ id: patch.id! })).path, patch.path)
+  assert.equal(
+    (s.kbGet({ path: 'patch/test-version/heroes/test-hero/fixture.md' }).items as RecordValue[])
+      .length,
+    1,
+  )
+})
+test('KB filters before limiting FTS hits and supports short queries without dropping matching notes', async (t) => {
+  const s = await setup(t),
+    source = record(s.source(material))
+  const wanted = record(
+    s.note({ ...note(source), hero: 'fixture-hero', body: 'Vision 小地图 fixture.' }),
+  )
+  for (let i = 0; i < 5; i++) s.note({ ...note(source), hero: 'other-hero', title: `Vision ${i}` })
+  assert.equal(
+    (s.kbSearch({ query: 'vision', hero: 'fixture-hero', limit: 1 }).items as RecordValue[])[0]!.id,
+    wanted.id,
+  )
+  assert.equal((s.kbSearch({ query: '小地' }).items as RecordValue[])[0]!.id, wanted.id)
+  assert.equal((s.kbSearch({ query: 'no-such-term' }).items as RecordValue[]).length, 0)
+})
+test('KB validates actions inputs and restricts path reads to knowledge Markdown under data home', async (t) => {
+  const s = await setup(t)
+  assert.throws(() => s.kbSearch({ query: ' ' }), /query/)
+  assert.throws(() => s.kbSearch({ query: 'fixture', kind: 'invented' }), /kind/)
+  assert.throws(() => s.kbGet({}), /exactly one/)
+  assert.throws(() => s.kbGet({ id: 'missing', path: 'principles.md' }), /exactly one/)
+  assert.throws(() => s.kbGet({ id: 'missing' }), /not found/)
+  assert.throws(() => s.kbGet({ id: record(s.source(material)).id! }), /not found/)
+  for (const path of [
+    '../package.json',
+    '/etc/passwd',
+    'coach.sqlite',
+    'patch/../library.md',
+    'patch/local.dem',
+  ])
+    assert.throws(() => s.kbGet({ path }), /Use principles/)
+  await symlink(join(process.cwd(), 'package.json'), join(s.home, 'patch/escape.md'))
+  assert.throws(() => s.kbGet({ path: 'patch/escape.md' }), /under data home/)
+  assert.throws(() => s.kbGet({ path: 'patch/missing.md' }), /not found/)
+})
 test('readable sources deduplicate by source, locator and content while retaining raw content', async (t) => {
   const s = await setup(t)
   const first = record(s.source(material)),
