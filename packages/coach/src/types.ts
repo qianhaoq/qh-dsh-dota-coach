@@ -10,6 +10,7 @@ export const toolNames = [
   'dota_hero',
   'dota_replay',
   'dota_parse',
+  'dota_kb',
   'dota_coach_note',
   'dota_source',
   'dota_review',
