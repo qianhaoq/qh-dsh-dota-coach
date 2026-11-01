@@ -1,15 +1,16 @@
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { build } from 'esbuild'
-import { mkdtemp, readFile, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, mkdir, writeFile, rm, cp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
 import { Config } from '../packages/coach/src/config.ts'
 import { CoachService } from '../packages/coach/src/service.ts'
 import { fixtureModel } from '../tests/coach-fixture.ts'
 import { indexTactical } from '../packages/coach/src/scene.ts'
 const dir = await mkdtemp(join(tmpdir(), 'dota-ui-'))
+const fixtureDir = join(dir, 'fixture')
 const result = await build({
   entryPoints: ['tests/ui-harness.tsx'],
   bundle: true,
@@ -19,21 +20,13 @@ const result = await build({
   loader: { '.css': 'text', '.webp': 'dataurl' },
   define: { 'process.env.NODE_ENV': '"development"' },
 })
-const ctx = new Context()
-fixtureModel(ctx)
-const service = new CoachService(
-  ctx,
-  Config({ homeDir: dir, memoryEnabled: false, skillEnabled: false }),
-  dir,
-  join(process.cwd(), 'packages/coach'),
-)
 const match = JSON.parse(await readFile('packages/coach/fixtures/match.json', 'utf8'))
 const datasets = new Map<string, unknown>()
 const cache = async (path: string, data: unknown) => {
   datasets.set(path, data)
-  await mkdir(join(dir, 'cache'), { recursive: true })
+  await mkdir(join(fixtureDir, 'cache'), { recursive: true })
   await writeFile(
-    join(dir, 'cache', createHash('sha256').update(path).digest('hex') + '.json'),
+    join(fixtureDir, 'cache', createHash('sha256').update(path).digest('hex') + '.json'),
     JSON.stringify({ at: Date.now(), body: data }),
   )
 }
@@ -51,10 +44,10 @@ await cache(
 await cache('/players/123/matches?limit=100', [
   { ...match, hero_id: 1, player_slot: 0, kills: 5, deaths: 2, assists: 4 },
 ])
-const traceDir = join(dir, 'replays/424242/trace')
+const traceDir = join(fixtureDir, 'replays/424242/trace')
 await mkdir(traceDir, { recursive: true })
 await writeFile(
-  join(dir, 'replays/424242/manifest.json'),
+  join(fixtureDir, 'replays/424242/manifest.json'),
   JSON.stringify({ match_id: 424242, status: 'ready', trace_version: 3, tactical_index: 1 }),
 )
 await writeFile(
@@ -114,10 +107,40 @@ await writeFile(
 )
 await writeFile(join(traceDir, 'events.jsonl'), '')
 await indexTactical(traceDir, new AbortController().signal)
-// Keep long manual acceptance sessions hermetic after the ordinary five-minute cache TTL.
-service.od.get = async (path) => {
-  if (!datasets.has(path)) throw new Error('Synthetic dataset unavailable: ' + path)
-  return structuredClone(datasets.get(path)) as import('../packages/coach/src/types.ts').Json
+const services = new Map<string, Promise<CoachService>>()
+async function createService(id: string) {
+  const home = join(dir, 'profiles', id)
+  await mkdir(home, { recursive: true })
+  await cp(fixtureDir, home, { recursive: true })
+  const ctx = new Context()
+  fixtureModel(ctx)
+  const service = new CoachService(
+    ctx,
+    Config({ homeDir: home, memoryEnabled: false, skillEnabled: false }),
+    home,
+    join(process.cwd(), 'packages/coach'),
+  )
+  // Keep long manual acceptance sessions hermetic after the ordinary five-minute cache TTL.
+  service.od.get = async (path) => {
+    if (!datasets.has(path)) throw new Error('Synthetic dataset unavailable: ' + path)
+    return structuredClone(datasets.get(path)) as import('../packages/coach/src/types.ts').Json
+  }
+  return service
+}
+function serviceFor(req: IncomingMessage, res: ServerResponse) {
+  const cookie = req.headers.cookie
+    ?.split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('dota-ui-profile='))
+  const existing = cookie && services.get(cookie.slice('dota-ui-profile='.length))
+  if (existing) return existing
+  // Browser contexts have separate cookies. Bind the backend before sending HTML so the
+  // panel's concurrent startup calls share a profile, and reloads retain saved progress.
+  const id = randomUUID()
+  const service = createService(id)
+  services.set(id, service)
+  res.setHeader('set-cookie', `dota-ui-profile=${id}; Path=/; HttpOnly; SameSite=Lax`)
+  return service
 }
 const server = createServer(async (req, res) => {
   try {
@@ -126,6 +149,7 @@ const server = createServer(async (req, res) => {
         res.setHeader('content-type', 'text/javascript')
         res.end(result.outputFiles[0]!.text)
       } else {
+        await serviceFor(req, res)
         res.setHeader('content-type', 'text/html')
         res.end(
           '<!DOCTYPE html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dota coach fixture</title><style>html,body,#root{height:100%;margin:0;background:#14191d}[data-testid=draft]{pointer-events:none;position:fixed;bottom:0;background:#28333b;padding:12px;white-space:pre-wrap}</style><div id="root"></div><script src="/app.js"></script></html>',
@@ -133,6 +157,7 @@ const server = createServer(async (req, res) => {
       }
       return
     }
+    const service = await serviceFor(req, res)
     let raw = ''
     for await (const chunk of req) raw += chunk
     const args = JSON.parse(raw || '{}')
@@ -153,8 +178,7 @@ const server = createServer(async (req, res) => {
 server.listen(4178, '127.0.0.1', () => console.log('UI fixture listening on 4178'))
 process.on('SIGTERM', () => {
   server.close()
-  void service
-    .dispose()
+  void Promise.allSettled([...services.values()].map(async (service) => (await service).dispose()))
     .then(() => rm(dir, { recursive: true, force: true }))
     .finally(() => process.exit())
 })
