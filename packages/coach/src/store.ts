@@ -366,7 +366,12 @@ export class CoachStore {
     }
     if (action !== 'checkin') throw new CoachError('invalid_arguments', 'Unknown training action')
     const checkin = z
-      .object({ match_id: z.number().int().positive(), body: text, completed: z.boolean() })
+      .object({
+        match_id: z.number().int().positive(),
+        body: text,
+        completed: z.boolean(),
+        opportunity: z.boolean().default(true),
+      })
       .parse(args)
     return this.transaction(() => ({
       ok: true,
@@ -375,13 +380,42 @@ export class CoachStore {
         {
           ...row,
           checkins: [
-            ...(Array.isArray(row.checkins) ? row.checkins : []),
-            { ...checkin, at: now(), basis: 'user_report' },
+            ...(Array.isArray(row.checkins)
+              ? row.checkins.filter(
+                  (c) =>
+                    !c ||
+                    typeof c !== 'object' ||
+                    Array.isArray(c) ||
+                    c.match_id !== checkin.match_id ||
+                    c.basis !== 'user_report',
+                )
+              : []),
+            {
+              ...checkin,
+              completed: checkin.opportunity && checkin.completed,
+              at: now(),
+              basis: 'user_report',
+            },
           ],
         },
         String(row.id),
       ),
     }))
+  }
+  saveSession(data: RecordValue, id?: string): RecordValue {
+    return this.transaction(() => this.put('coach_session', data, id))
+  }
+  activateGuidedGoal(id: string, context: RecordValue): void {
+    const goal = this.get(id, 'training')
+    for (const previous of this.list('training', { limit: 200 })) {
+      if (
+        previous.id !== id &&
+        previous.status === 'active' &&
+        previous.account_id === context.account_id
+      )
+        this.put('training', { ...previous, status: 'paused' }, String(previous.id))
+    }
+    this.put('training', { ...goal, ...context, target_games: 5 }, id)
   }
   evidence(matchId: number, window: RecordValue, body: RecordValue): RecordValue {
     const content = JSON.stringify(body)

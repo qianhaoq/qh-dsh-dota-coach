@@ -1,6 +1,13 @@
 import React, { useSyncExternalStore, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Panel } from '../packages/coach/src/client/Panel.tsx'
+import { Panel as CoachPanel } from '../packages/coach/src/client/Panel.tsx'
+import { GuidedPanel } from '../packages/coach/src/client/GuidedPanel.tsx'
+import { LegacyPanel } from '../packages/coach/src/client/LegacyPanel.tsx'
+const Panel = new URLSearchParams(location.search).has('legacy')
+  ? LegacyPanel
+  : new URLSearchParams(location.search).has('guided')
+    ? GuidedPanel
+    : CoachPanel
 import { zh, en } from '../packages/coach/src/client/locales.ts'
 import style from '../packages/coach/src/client/style.css'
 import type { Selection } from '../packages/coach/src/client/api.ts'

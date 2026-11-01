@@ -1,0 +1,42 @@
+import { test, expect } from '@playwright/test'
+test('agent-authored surfaces link clips, choices, evidence and match details', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Dota Coach 首页', exact: true }).click()
+  await page.getByRole('textbox', { name: '比赛 ID 或链接', exact: true }).fill('424242')
+  await page.getByRole('button', { name: '开始复盘', exact: true }).click()
+  await page.getByRole('button', { name: 'Razor 天辉', exact: true }).click()
+  await expect(page.locator('[data-a2ui-version="v0.9.1"] .dc-ui-card')).toHaveCount(3)
+  await expect(page.locator('.dc-stage-overview')).not.toHaveAttribute('open')
+  await page.getByRole('button', { name: '回放', exact: true }).nth(1).click()
+  const detail = page.getByRole('dialog')
+  await expect(detail.getByRole('img', { name: '战术回放地图' })).toBeVisible()
+  await detail
+    .getByRole('button', { name: '2:00 · 比赛数据记录一次死亡；主观意图未知。', exact: true })
+    .click()
+  await expect(detail.getByRole('slider', { name: '回放时间' })).toHaveValue('120')
+  await detail.getByRole('button', { name: '选择对比', exact: true }).click()
+  await expect(detail.getByRole('heading', { name: '我实际做了什么' })).toBeVisible()
+  await detail.getByRole('button', { name: '具体支撑', exact: true }).click()
+  await expect(detail.getByRole('heading', { name: '1:45 · 决策前状态' })).toBeVisible()
+  await detail.getByRole('button', { name: '对局详情', exact: true }).click()
+  await expect(detail.getByRole('table')).toHaveCount(2)
+  await detail.press('Escape')
+  await expect(detail).toHaveCount(0)
+  await page.getByRole('button', { name: '2:00 问 AI', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '继续问教练' })).toHaveCount(1)
+  await page.getByRole('textbox', { name: '继续问教练' }).fill('2:00 这里有哪些选择？')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.dc-chat-answer [data-a2ui-version]')).toHaveCount(1)
+  await page.reload()
+  await expect(page.getByText('2:00 这里有哪些选择？', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /重新生成|重新校准/ })).toHaveCount(0)
+  await page.locator('.dc-practice-fold > summary').click()
+  await page.getByRole('button', { name: '保存这一项练习', exact: true }).click()
+  await expect(
+    page.getByText('已保存，下次回到「我的练习」记录实践', { exact: true }),
+  ).toBeVisible()
+  await page.reload()
+  await expect(page.getByText('练习已保存', { exact: true })).toBeVisible()
+})

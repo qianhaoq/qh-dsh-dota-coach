@@ -19,6 +19,7 @@ const options = workerData as {
   modelPath: string
 }
 const root = options.home
+const namespace = { agentKind: 'dsh-dota-coach', profileId: 'dota-coach' }
 const route = new AsyncLocalStorage<{
   id: number
   modelRoute?: { provider: string; model: string }
@@ -58,6 +59,7 @@ const config = resolveConfig({
 })
 const core = await bootstrapMemoryCore({
   agent: 'dsh-dota-coach',
+  namespace,
   autoRecovery: false,
   pkgVersion: '2.0.21',
   config,
@@ -95,7 +97,9 @@ const core = await bootstrapMemoryCore({
     },
   },
 })
-const namespace = { agentKind: 'dsh-dota-coach', profileId: 'dota-coach' }
+// Health reads the persisted configuration; this worker owns it through DSH.
+await core.patchConfig({ ...config })
+await core.init()
 const controllers = new Map<number, AbortController>()
 port.on(
   'message',

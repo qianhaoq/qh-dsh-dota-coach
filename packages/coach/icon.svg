@@ -1,13 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Dota2 coach">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2f6f4f"/>
-      <stop offset="1" stop-color="#123a2a"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#g)"/>
-  <path d="M32 9 55 32 32 55 9 32Z" fill="none" stroke="#8fe3b0" stroke-width="2.5" opacity="0.9"/>
-  <path d="M30 22v20l15-10Z" fill="#e9f7ef"/>
-  <circle cx="32" cy="32" r="4" fill="#0d2a1f"/>
-  <path d="M14 20c6 3 9 8 9 12M50 44c-6-3-9-8-9-12" fill="none" stroke="#7ad39d" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1c1f23"/><g fill="none" stroke="#e57562" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M17 12h30v40H17zM25 23l14 18M36 23h3v4M25 37v4h3"/></g></svg>

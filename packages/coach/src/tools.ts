@@ -17,6 +17,68 @@ const match_id = {
 const filter = { query: string, hero: string, patch: string, tag: string, limit: number }
 export const toolSpecs: Record<ToolName, { description: string; parameters: ParameterSchemaSpec }> =
   {
+    dota_coach: {
+      description:
+        'Complete post-match coaching and persistent follow-up conversation inside the plugin. Start with a match ID (full report by default); fetching and parsing are automatic. Open cached/resumable reports, get progress, discuss with a unique turn_id, stop an answer, or save one adopted practice goal. Unknown visibility is never inferred from distance.',
+      parameters: {
+        action: {
+          ...enumeration(
+            'start',
+            'get',
+            'list',
+            'answer',
+            'next',
+            'save',
+            'cancel',
+            'scene',
+            'report',
+            'preferences',
+            'open',
+            'discuss',
+            'stop_discussion',
+            'presentation',
+          ),
+          required: true,
+        },
+        id: string,
+        match_id: number,
+        account_id: number,
+        player_slot: number,
+        session_id: string,
+        role: number,
+        locale: enumeration('zh', 'en'),
+        format: enumeration('report', 'guided'),
+        preferences: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            focus: {
+              type: 'array',
+              items: enumeration('laning', 'farm', 'fight', 'items', 'objectives', 'support'),
+            },
+            style: enumeration('balanced', 'tempo', 'safe'),
+            detail: enumeration('standard', 'detailed'),
+            intention: string,
+          },
+          description:
+            'Review preferences: focus (array of laning/farm/fight/items/objectives/support), style (balanced/tempo/safe), detail (standard/detailed), intention (string).',
+        },
+        answer: string,
+        question: string,
+        message: string,
+        turn_id: string,
+        stage_id: string,
+        decision_id: string,
+        retry: { type: 'boolean' },
+        from: number,
+        to: number,
+        full: { type: 'boolean' },
+        title: string,
+        trigger: string,
+        action_rule: string,
+        check_method: string,
+      },
+    },
     dota_memory: {
       description:
         'Search local MemOS knowledge and candidate experience, inspect records, repair embeddings, or learn from a grounded review using the owning DSH model. Generated patterns remain candidates.',
@@ -173,6 +235,7 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
         match_id: number,
         body: string,
         completed: { type: 'boolean' },
+        opportunity: { type: 'boolean' },
         limit: number,
       },
     },

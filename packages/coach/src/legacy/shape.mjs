@@ -129,6 +129,7 @@ export function matchSummaryRow(row, heroes, accountId, { forceSelf = false } = 
   return {
     match_id: row.match_id,
     hero: hero?.name || `hero_${row.hero_id}`,
+    npc: hero?.npc?.replace(/^npc_dota_hero_/, "") || "",
     hero_id: row.hero_id,
     result: win,
     kda: `${row.kills ?? '?'}/${row.deaths ?? '?'}/${row.assists ?? '?'}`,

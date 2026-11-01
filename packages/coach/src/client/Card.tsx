@@ -1,3 +1,4 @@
+import { Icon } from './Icons.tsx'
 import type { PropsLocale, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 export interface CardInjected {
@@ -26,7 +27,18 @@ export function ToolCard(
   const content = 'content' in block ? block.content : []
   return (
     <div className="dota-tool-card">
-      <strong>{p.toolName}</strong>
+      <strong>
+        <Icon name="mark" size={17} />{' '}
+        {(
+          {
+            dota_coach: p.t('title'),
+            dota_matches: 'Dota 2 · Matches',
+            dota_replay: 'Dota 2 · Replay',
+            dota_memory: 'Dota 2 · Memory',
+            dota_parse: 'Dota 2 · Analysis',
+          } as Record<string, string>
+        )[p.toolName] || p.toolName.replace(/^dota_/, 'Dota 2 · ')}
+      </strong>
       {id !== null && (
         <button onClick={() => p.open(id!)}>
           #{id} · {p.t('open')}
@@ -45,13 +57,5 @@ export function ToolCard(
   )
 }
 export function NavIcon({ size }: { size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="m4 4 16 16M4 20 20 4M6 2H2v4m16 16h4v-4M2 18v4h4M22 6V2h-4"
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    </svg>
-  )
+  return <Icon name="mark" size={size} />
 }

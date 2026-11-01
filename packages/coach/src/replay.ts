@@ -3,11 +3,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { mkdir, readFile, rm, stat, readdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import type { CoachConfig } from './config.ts'
 import { CoachError } from './errors.ts'
 import { download } from './http.ts'
 import type { RecordValue } from './types.ts'
+import { TRACE_VERSION, indexTactical, readScene } from './scene.ts'
 export function extractor(config: CoachConfig, pkg: string): string {
   return (
     config.extractBin ||
@@ -200,10 +202,14 @@ export class Replays {
     }
     return total
   }
-  async parse(id: number, signal: AbortSignal): Promise<RecordValue> {
+  async parse(id: number, signal: AbortSignal, upgrade = true): Promise<RecordValue> {
     const manifest = await this.inspect(id)
     if (manifest.status !== 'ready') throw new CoachError('no_demo', 'Fetch a replay first')
-    if (manifest.trace_version === 2) return { ok: true, cached: true }
+    if (
+      (!upgrade && manifest.trace_version === 2) ||
+      (manifest.trace_version === TRACE_VERSION && manifest.tactical_index === 1)
+    )
+      return { ok: true, cached: true }
     const temp = join(this.dir(id), 'trace-' + randomUUID() + '.part')
     await mkdir(temp, { recursive: true })
     try {
@@ -224,6 +230,11 @@ export class Replays {
         ],
         signal,
       )
+      await indexTactical(join(temp, 'trace'), signal)
+      await rm(join(temp, 'trace', 'states.jsonl'))
+      await rm(join(temp, 'trace', 'events.jsonl'))
+      if ((await this.diskBytes(temp)) > budget)
+        throw new CoachError('disk_limit', 'Indexed replay exceeds storage budget')
       await rm(join(this.dir(id), 'trace'), { recursive: true, force: true })
       await rename(join(temp, 'trace'), join(this.dir(id), 'trace'))
       const tmp = join(this.dir(id), 'manifest.json.part')
@@ -231,7 +242,8 @@ export class Replays {
         tmp,
         JSON.stringify({
           ...manifest,
-          trace_version: 2,
+          trace_version: TRACE_VERSION,
+          tactical_index: 1,
           parsed_at: new Date().toISOString(),
           trace: summary,
         }),
@@ -242,11 +254,84 @@ export class Replays {
       await rm(temp, { recursive: true, force: true })
     }
   }
+  async keyEvents(id: number, hero: string, signal: AbortSignal): Promise<RecordValue[]> {
+    const manifest = await this.inspect(id)
+    if (manifest.trace_version !== TRACE_VERSION || manifest.tactical_index !== 1) return []
+    const directory = join(this.dir(id), 'trace', 'windows'),
+      result: RecordValue[] = []
+    for (const name of (await readdir(directory))
+      .filter((n) => n.startsWith('events-') && n.endsWith('.gz'))
+      .sort()) {
+      signal.throwIfAborted()
+      const body = gunzipSync(await readFile(join(directory, name), { signal })).toString('utf8')
+      for (const line of body.split('\n')) {
+        if (!line) continue
+        const event = JSON.parse(line) as RecordValue
+        if (
+          String(event.type).endsWith('_DEATH') &&
+          event.target === `npc_dota_hero_${hero}` &&
+          event.target_hero === true &&
+          event.target_illusion !== true
+        )
+          result.push(event)
+      }
+    }
+    return result.sort((a, b) => Number(a.t) - Number(b.t)).slice(0, 100)
+  }
+  /** Match-wide decision candidates. Post-match observations, never decision-time vision. */
+  async reviewEvents(id: number, hero: string, signal: AbortSignal): Promise<RecordValue[]> {
+    const manifest = await this.inspect(id)
+    if (manifest.trace_version !== TRACE_VERSION || manifest.tactical_index !== 1) return []
+    const directory = join(this.dir(id), 'trace', 'windows'),
+      result: RecordValue[] = []
+    const npc = `npc_dota_hero_${hero}`
+    for (const name of (await readdir(directory)).filter(
+      (n) => n.startsWith('events-') && n.endsWith('.gz'),
+    )) {
+      signal.throwIfAborted()
+      const body = gunzipSync(await readFile(join(directory, name), { signal })).toString('utf8')
+      for (const line of body.split('\n')) {
+        if (!line) continue
+        const e = JSON.parse(line) as RecordValue,
+          kind = String(e.type)
+        const own = e.attacker === npc && e.attacker_illusion !== true
+        const died = e.target === npc && e.target_illusion !== true && kind.endsWith('_DEATH')
+        if (
+          died ||
+          (own &&
+            (/_(ABILITY|ITEM|PURCHASE)$/.test(kind) ||
+              (kind.endsWith('_DEATH') && e.target_hero === true && e.target_illusion !== true)))
+        )
+          result.push(e)
+      }
+    }
+    return result.sort((a, b) => Number(a.t) - Number(b.t)).slice(0, 15000)
+  }
+  async scene(
+    id: number,
+    from: number,
+    to: number,
+    team: number,
+    full = false,
+  ): Promise<RecordValue> {
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from || to - from > 60)
+      throw new CoachError('invalid_window', 'Scene window must be finite and at most 60 seconds')
+    const manifest = await this.inspect(id)
+    if (manifest.trace_version !== TRACE_VERSION || manifest.tactical_index !== 1)
+      return {
+        ok: true,
+        states: [],
+        events: [],
+        missing: '精细录像尚未准备 / Fine replay is unavailable',
+        window: { from, to },
+      }
+    return readScene(join(this.dir(id), 'trace'), from, to, team, full)
+  }
   async trace(
     id: number,
   ): Promise<{ heroes: RecordValue[]; wards: RecordValue[]; objectives: RecordValue[] } | null> {
     const manifest = await this.inspect(id)
-    if (manifest.trace_version !== 2) return null
+    if (![2, TRACE_VERSION].includes(Number(manifest.trace_version))) return null
     const read = async (file: string) => {
       const rows = (await readFile(join(this.dir(id), 'trace', file + '.jsonl'), 'utf8'))
         .split('\n')

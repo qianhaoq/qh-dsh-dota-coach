@@ -17,6 +17,9 @@ export type { CoachRequest, CoachReply, TaskView }
 export const name = 'dota-coach'
 export const inject = ['tools', 'typert']
 const pkg = fileURLToPath(new URL('..', import.meta.url))
+const version: string = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version
 declare module '@deepseek-ai/cordis' {
   interface Context {
     dotaCoach: CoachRemote
@@ -58,7 +61,7 @@ export class CoachRemote extends TypertRemoteService {
 /** All effects and work are owned by this Cordis scope, including asynchronous teardown. */
 export async function apply(ctx: Context, config: CoachConfig): Promise<void> {
   if (!config.enabled) return
-  const service = new CoachService(ctx, config, dataHome(config), pkg)
+  const service = new CoachService(ctx, config, dataHome(config), pkg, version)
   ctx.effect(() => () => service.dispose())
   if (service.memory) await service.memory.request('health')
   if (service.tasks.controller.signal.aborted) return

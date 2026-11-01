@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
 import { Config } from '../packages/coach/src/config.ts'
 import { CoachService } from '../packages/coach/src/service.ts'
+import { fixtureModel } from '../tests/coach-fixture.ts'
+import { indexTactical } from '../packages/coach/src/scene.ts'
 const dir = await mkdtemp(join(tmpdir(), 'dota-ui-'))
 const result = await build({
   entryPoints: ['tests/ui-harness.tsx'],
@@ -14,10 +16,11 @@ const result = await build({
   jsx: 'automatic',
   format: 'iife',
   write: false,
-  loader: { '.css': 'text' },
+  loader: { '.css': 'text', '.webp': 'dataurl' },
   define: { 'process.env.NODE_ENV': '"development"' },
 })
 const ctx = new Context()
+fixtureModel(ctx)
 const service = new CoachService(
   ctx,
   Config({ homeDir: dir, memoryEnabled: false, skillEnabled: false }),
@@ -25,13 +28,16 @@ const service = new CoachService(
   join(process.cwd(), 'packages/coach'),
 )
 const match = JSON.parse(await readFile('packages/coach/fixtures/match.json', 'utf8'))
+const datasets = new Map<string, unknown>()
 const cache = async (path: string, data: unknown) => {
+  datasets.set(path, data)
   await mkdir(join(dir, 'cache'), { recursive: true })
   await writeFile(
     join(dir, 'cache', createHash('sha256').update(path).digest('hex') + '.json'),
     JSON.stringify({ at: Date.now(), body: data }),
   )
 }
+await cache('/constants/patch', { '54': { name: '7.40' } })
 await cache('/matches/424242', match)
 await cache('/matches/424243', { ...match, match_id: 424243 })
 await cache(
@@ -49,7 +55,7 @@ const traceDir = join(dir, 'replays/424242/trace')
 await mkdir(traceDir, { recursive: true })
 await writeFile(
   join(dir, 'replays/424242/manifest.json'),
-  JSON.stringify({ match_id: 424242, status: 'ready', trace_version: 2 }),
+  JSON.stringify({ match_id: 424242, status: 'ready', trace_version: 3, tactical_index: 1 }),
 )
 await writeFile(
   join(traceDir, 'objectives.jsonl'),
@@ -73,6 +79,46 @@ await writeFile(
   ).join('\n'),
 )
 await writeFile(join(traceDir, 'wards.jsonl'), '')
+await writeFile(
+  join(traceDir, 'states.jsonl'),
+  Array.from({ length: 2401 }, (_, i) =>
+    [27, 15]
+      .map((hero, j) =>
+        JSON.stringify({
+          t: i / 4,
+          entity_id: `${j}:1`,
+          entity_kind: 'real_hero',
+          hero: j ? 'razor' : 'shadow_shaman',
+          team: 2,
+          x: -3700 + i * 1.5 + j * 1000,
+          y: -3200 + i * 0.8 + j * 700,
+          hp: 800,
+          max_hp: 1000,
+          mana: 350,
+          max_mana: 500,
+          life_state: 0,
+          visible_radiant: true,
+          abilities: [
+            {
+              slot: 0,
+              name: j ? 'razor_plasma_field' : 'necrolyte_death_pulse',
+              level: 2,
+              cooldown: (i % 20) / 4,
+            },
+          ],
+          items: [{ slot: 0, name: 'blink', cooldown: 0 }],
+        }),
+      )
+      .join('\n'),
+  ).join('\n'),
+)
+await writeFile(join(traceDir, 'events.jsonl'), '')
+await indexTactical(traceDir, new AbortController().signal)
+// Keep long manual acceptance sessions hermetic after the ordinary five-minute cache TTL.
+service.od.get = async (path) => {
+  if (!datasets.has(path)) throw new Error('Synthetic dataset unavailable: ' + path)
+  return structuredClone(datasets.get(path)) as import('../packages/coach/src/types.ts').Json
+}
 const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET') {
@@ -82,7 +128,7 @@ const server = createServer(async (req, res) => {
       } else {
         res.setHeader('content-type', 'text/html')
         res.end(
-          '<!DOCTYPE html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dota coach fixture</title><style>html,body,#root{height:100%;margin:0;background:#14191d}aside{pointer-events:none;position:fixed;bottom:0;background:#28333b;padding:12px;white-space:pre-wrap}</style><div id="root"></div><script src="/app.js"></script></html>',
+          '<!DOCTYPE html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dota coach fixture</title><style>html,body,#root{height:100%;margin:0;background:#14191d}[data-testid=draft]{pointer-events:none;position:fixed;bottom:0;background:#28333b;padding:12px;white-space:pre-wrap}</style><div id="root"></div><script src="/app.js"></script></html>',
         )
       }
       return

@@ -24,3 +24,12 @@ OpenDota data is fetched from https://api.opendota.com/api . Match records and
 external teaching material are not supplied with the plugin. Test match data
 and the tiny decompression fixtures are synthetic. Local model weights are
 not part of these archives and retain their own model licenses.
+
+Reference map: OpenDota web detailed_740.webp, retrieved from
+https://github.com/odota/web/blob/master/public/assets/images/dota2/map/detailed_740.webp .
+OpenDota web code is MIT; Dota 2 map art, hero, skill and item images remain
+Valve property. Hero/skill/item images load from Valve's Steam CDN. This plugin
+is not affiliated with Valve. The 7.40 image is labeled as a reference map,
+not a reconstruction of the current patch's terrain or fog of war.
+Unit-state names follow the game schema at
+https://github.com/SteamTracking/GameTracking-Dota2/blob/master/DumpSource2/schemas/client/modifierstate.h .

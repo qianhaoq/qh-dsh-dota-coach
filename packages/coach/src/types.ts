@@ -2,6 +2,7 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type RecordValue = { [key: string]: Json }
 export const toolNames = [
+  'dota_coach',
   'dota_status',
   'dota_matches',
   'dota_match',

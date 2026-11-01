@@ -60,7 +60,13 @@ try {
     .catch(() => {})
   await page.keyboard.press('Escape')
   await nav.click()
-  await expect(page.getByRole('heading', { name: 'Dota coach', exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('heading', {
+      name: 'Understand this game. Make the next one better.',
+      exact: true,
+    }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Library', exact: true }).click()
   await page.getByRole('tab', { name: 'Knowledge', exact: true }).click()
   await page.getByRole('combobox', { name: 'Search', exact: true }).selectOption('sources')
   await page.getByRole('button', { name: 'Search', exact: true }).click()

@@ -1,8 +1,8 @@
 {
   "name": "@qianhaoq/dsh-dota-coach",
-  "version": "0.1.1",
+  "version": "0.6.3",
   "type": "module",
-  "description": "Evidence-based local Dota 2 coaching for DSH",
+  "description": "AI-native guided Dota 2 replay coaching for DSH",
   "license": "MIT",
   "author": "Hao Qian",
   "repository": {

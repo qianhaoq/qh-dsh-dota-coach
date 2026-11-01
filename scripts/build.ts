@@ -35,7 +35,7 @@ await build({
   bundle: true,
   jsx: 'automatic',
   external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/dsh-client-store'],
-  loader: { '.css': 'text' },
+  loader: { '.css': 'text', '.webp': 'dataurl' },
   banner: {
     js: 'window.__ModuleLoader__.load({ id: "@qianhaoq/dsh-dota-coach", factory: (require) => { var module = { exports: {} }; var exports = module.exports;',
   },

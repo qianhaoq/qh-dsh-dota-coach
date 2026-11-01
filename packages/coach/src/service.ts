@@ -6,9 +6,12 @@ import { stat, mkdir, writeFile } from 'node:fs/promises'
 import { CoachStore } from './store.ts'
 import { OpenDota } from './http.ts'
 import { KnowledgeMemory } from './memory.ts'
+import { CoachModel } from './model.ts'
+import { GuidedCoach } from './coaching.ts'
 import { Tasks } from './tasks.ts'
 import { Replays, extractor } from './replay.ts'
 import { CoachError, failure, required } from './errors.ts'
+import { dispatchSourceTool } from './host-tools.ts'
 import type { CoachConfig } from './config.ts'
 import type { RecordValue, ToolName, Json } from './types.ts'
 import * as S from './legacy/shape.mjs'
@@ -40,6 +43,7 @@ export function heroLifeState(value: unknown): {
 }
 export class CoachService {
   readonly tasks = new Tasks()
+  readonly guided: GuidedCoach
   readonly store: CoachStore
   readonly od: OpenDota
   readonly replays: Replays
@@ -53,12 +57,55 @@ export class CoachService {
     readonly cfg: CoachConfig,
     readonly home: string,
     readonly pkg: string,
+    readonly version = 'development',
   ) {
     this.store = new CoachStore(home)
     this.store.migrate()
     this.od = new OpenDota(home, cfg, this.tasks.controller.signal)
     this.replays = new Replays(home, cfg, pkg)
     if (cfg.memoryEnabled) this.memory = new KnowledgeMemory(ctx, join(home, 'memory'), cfg)
+    this.guided = new GuidedCoach(
+      this.store,
+      this.replays,
+      new CoachModel(ctx),
+      async (id, signal) => {
+        const [match, constants] = await Promise.all([
+          this.match(id, signal),
+          this.constants(signal),
+        ])
+        const patches = await this.od
+          .get('/constants/patch', AbortSignal.any([signal, AbortSignal.timeout(3000)]), 604800000)
+          .catch(() => null)
+        const entry =
+          patches && typeof patches === 'object'
+            ? (patches as Record<string, unknown>)[String(match.patch)]
+            : null
+        const patchName =
+          typeof entry === 'string'
+            ? entry
+            : entry && typeof entry === 'object' && 'name' in entry
+              ? String(entry.name)
+              : undefined
+        return { match: json(match), heroes: constants.heroes.list, patchName }
+      },
+      async (id, signal) => {
+        const fetch = await this.invoke('dota_replay', { action: 'fetch', match_id: id }, signal)
+        if (!fetch.ok) return fetch
+        return this.invoke('dota_parse', { action: 'summary', match_id: id }, signal)
+      },
+      this.tasks.controller.signal,
+      async (query, signal) => {
+        if (this.memory) {
+          const value = await this.invoke(
+            'dota_memory',
+            { action: 'search', query, limit: 4 },
+            signal,
+          )
+          if (value.ok) return value
+        }
+        return this.store.note({ action: 'search', query: query.split(' ')[0], limit: 4 })
+      },
+    )
   }
   invoke(
     name: ToolName,
@@ -75,6 +122,13 @@ export class CoachService {
       exec,
     )
       .then(async (result) => {
+        if (this.memory && result.ok && name === 'dota_coach' && args.action === 'save') {
+          void this.projectPending(exec).catch(() =>
+            this.ctx.logger.warn(
+              'Coach knowledge indexing remains pending; saved records are intact',
+            ),
+          )
+        }
         if (
           this.memory &&
           result.ok &&
@@ -114,6 +168,7 @@ export class CoachService {
   }
   async dispose(): Promise<void> {
     this.closing = true
+    await this.guided.dispose()
     await this.tasks.dispose()
     await this.od.dispose()
     await Promise.allSettled([...this.running])
@@ -148,11 +203,24 @@ export class CoachService {
     exec?: ToolRunContext,
   ): Promise<RecordValue> {
     signal.throwIfAborted()
+    if (name === 'dota_coach') {
+      const agents = this.ctx.get('agents' as never) as
+        | { get?: (id: string) => { options: { provider?: string; model?: string } } | undefined }
+        | undefined
+      const owner =
+        exec?.agent ?? (typeof a.session_id === 'string' ? agents?.get?.(a.session_id) : undefined)
+      return this.guided.invoke(
+        a,
+        owner?.options.provider && owner.options.model
+          ? { provider: owner.options.provider, model: owner.options.model }
+          : undefined,
+      )
+    }
     if (name === 'dota_status') {
       const bin = extractor(this.cfg, this.pkg)
       return {
         ok: true,
-        version: '0.1.0',
+        version: this.version,
         account: { configured: this.store.setting('accountId') || this.cfg.accountId || null },
         home: this.home,
         storage: 'sqlite',
@@ -287,7 +355,7 @@ export class CoachService {
             ])
             return name === 'dota_replay'
               ? this.replays.fetch(id, match.replay_url, bounded)
-              : this.replays.parse(id, bounded)
+              : this.replays.parse(id, bounded, !a.action || a.action === 'summary')
           }
           const p = this.replayQueue.catch(() => {}).then(run)
           this.replayQueue = p
@@ -598,15 +666,19 @@ export class CoachService {
         'source_requires_session',
         'Fetch from a DSH conversation; the panel can import text',
       )
-    const outcome = await this.ctx.tools.execute({
-      callId: `${exec.callId}:source:${randomUUID()}` as typeof exec.callId,
-      rootCallId: exec.rootCallId,
-      parent: exec.token,
-      name: provider,
-      arguments: a.provider_args || {},
-      signal,
-      agent: exec.agent,
-    })
+    const outcome = await dispatchSourceTool(
+      this.ctx,
+      {
+        callId: `${exec.callId}:source:${randomUUID()}` as typeof exec.callId,
+        rootCallId: exec.rootCallId,
+        parent: exec.token,
+        name: provider,
+        arguments: a.provider_args || {},
+        signal,
+        agent: exec.agent,
+      },
+      exec,
+    )
     if (outcome.isError)
       throw new CoachError('source_fetch_failed', 'Source plugin failed', {
         content: json(outcome.content) as Json,

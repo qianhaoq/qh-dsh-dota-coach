@@ -149,6 +149,22 @@ func run(args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	states, err := os.Create(filepath.Join(trace, "states.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer states.Close()
+	events, err := os.Create(filepath.Join(trace, "events.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer events.Close()
+	wardOutput, err := os.Create(filepath.Join(trace, "wards-native.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer wardOutput.Close()
+	tactical := registerTactical(p, states, events, wardOutput, encode)
 	entities := map[string]*manta.Entity{}
 	wards := map[string]Row{}
 	objectives := map[string]bool{}
@@ -267,7 +283,7 @@ func run(args []string) (err error) {
 	if err = p.Start(); err != nil {
 		return err
 	}
-	return emit(Row{"ok": true, "trace_version": 2, "samples": samples, "wards": nwards, "objectives": nobj, "ticks": p.Tick, "sample_every_ticks": every, "clock": "demo_tick_30hz_requires_calibration", "bytes": st.Size(), "output_bytes": total, "ms": time.Since(started).Milliseconds()})
+	return emit(Row{"ok": true, "trace_version": tacticalVersion, "tactical": *tactical, "samples": samples, "wards": nwards, "objectives": nobj, "ticks": p.Tick, "sample_every_ticks": every, "clock": "demo_tick_30hz_requires_calibration", "bytes": st.Size(), "output_bytes": total, "ms": time.Since(started).Milliseconds()})
 }
 func classify(selected, hasSelection bool, cloneValue interface{}) string {
 	if clone, ok := cloneValue.(bool); ok && clone {

@@ -1,11 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import Tools, {
+  assertObjectJsonSchema,
   defineTool,
   type ToolExecutionInput,
   type ToolRunContext,
@@ -52,7 +53,7 @@ async function invoke(ctx: Context, name: string, args: unknown, parent?: ToolRu
     ...(parent ? { parent } : {}),
   })
 }
-test('all 12 official tools register, title remains a parameter, defaults are plain config fields and reload cleans up', async (t) => {
+test('all 13 official tools register, title remains a parameter, defaults are plain config fields and reload cleans up', async (t) => {
   const { ctx, fiber } = await mounted(t)
   assert.ok(await ctx.skills.get('dota2-coach'))
   for (const name of toolNames) {
@@ -61,6 +62,7 @@ test('all 12 official tools register, title remains a parameter, defaults are pl
     assert.equal(definition.parameters.type, 'object')
     assert.ok(definition.output?.schema)
   }
+  assert.ok(JSON.stringify(ctx.tools.get('dota_coach')!.parameters).includes('presentation'), 'the host registry admits presentation actions')
   const result = await invoke(ctx, 'dota_source', {
     action: 'import',
     source_id: 'user:fixture',
@@ -71,6 +73,8 @@ test('all 12 official tools register, title remains a parameter, defaults are pl
   assert.equal(result.isError, false)
   assert.ok(JSON.stringify(result.value).includes('Required title'))
   const status = await invoke(ctx, 'dota_status', {})
+  const manifest = JSON.parse(await readFile('packages/coach/package.json', 'utf8'))
+  assert.equal((status.value as { version: string }).version, manifest.version)
   assert.ok(!JSON.stringify(status).includes('TEST_SECRET'))
   assert.ok(!JSON.stringify(Config({ homeDir: 'fixture' })).includes('[object Object]'))
   await fiber.restart()
@@ -78,6 +82,49 @@ test('all 12 official tools register, title remains a parameter, defaults are pl
   await fiber.dispose()
   for (const name of toolNames) assert.equal(ctx.tools.get(name), undefined)
   assert.equal(await ctx.skills.get('dota2-coach'), undefined)
+})
+test('model-facing schemas keep title in properties across reload and accept a titled knowledge note', async (t) => {
+  const { ctx, fiber } = await mounted(t)
+  const titledTools = ['dota_source', 'dota_coach_note', 'dota_review']
+  const checkSchemas = () => {
+    const schemas = ctx.tools
+      .schemas()
+      .filter((tool) => toolNames.includes(tool.name as (typeof toolNames)[number]))
+    assert.equal(schemas.length, toolNames.length)
+    assert.equal(new Set(schemas.map((tool) => tool.name)).size, toolNames.length)
+    for (const tool of schemas) {
+      assertObjectJsonSchema(tool.parameters)
+      assert.equal(tool.parameters.title, undefined)
+      if (titledTools.includes(tool.name))
+        assert.deepEqual(tool.parameters.properties?.title, { type: 'string' })
+    }
+  }
+  checkSchemas()
+  const source = await invoke(ctx, 'dota_source', {
+    action: 'import',
+    source_id: 'user:schema-regression',
+    title: 'Readable source title',
+    body: 'Check allied positions before crossing the river toward an objective.',
+    locator: 'paragraph 1',
+  })
+  assert.equal(source.isError, false)
+  const sourceRecord = (source.value as { record: { id: string } }).record
+  const args = {
+    action: 'append',
+    kind: 'principle',
+    source_record_id: sourceRecord.id,
+    source_id: 'user:schema-regression',
+    stamp: '[unknown · 2026-10-31 · user:schema-regression]',
+    title: 'Knowledge title remains a parameter',
+    body: 'Check allied positions before crossing the river.',
+  }
+  const note = await invoke(ctx, 'dota_coach_note', args)
+  assert.equal(note.isError, false)
+  assert.equal((note.value as { ok: boolean }).ok, true, JSON.stringify(note.value))
+  assert.equal((note.value as { record: { title: string } }).record.title, args.title)
+  assert.equal((await invoke(ctx, 'dota_coach_note', { ...args, title: 123 })).isError, true)
+  await fiber.restart()
+  checkSchemas()
 })
 test('native and PTC transport preserve the same domain value with a fixture runtime', async (t) => {
   const native = await mounted(t),

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 test('no account, unavailable replay and no source plugin remain usable', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?legacy=1')
   await expect(page.getByText('先设置账号，或直接输入对局 ID 开始复盘。')).toBeVisible()
   await page.getByRole('tab', { name: '复盘', exact: true }).click()
   await page.getByLabel('对局 ID', { exact: true }).fill('424243')
@@ -15,7 +15,7 @@ test('no account, unavailable replay and no source plugin remain usable', async 
 test('review window, evidence-linked learning, one training goal and checkin work together', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto('/?legacy=1')
   await page.getByRole('tab', { name: '复盘', exact: true }).click()
   await page.getByLabel('对局 ID', { exact: true }).fill('424242')
   await page.getByRole('button', { name: '读取', exact: true }).click()
@@ -47,7 +47,7 @@ test('review window, evidence-linked learning, one training goal and checkin wor
   await page.screenshot({ path: 'test-results/review-training.png', fullPage: true })
 })
 test('English follows the host dictionary', async ({ page }) => {
-  await page.goto('/?lang=en')
+  await page.goto('/?lang=en&legacy=1')
   await expect(page.getByRole('heading', { name: 'Dota coach', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Knowledge', exact: true })).toBeVisible()
 })
@@ -55,7 +55,7 @@ test('English follows the host dictionary', async ({ page }) => {
 test('material import, evidence-linked knowledge and original source remain readable', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto('/?legacy=1')
   await page.getByRole('tab', { name: '知识库', exact: true }).click()
   await page.getByRole('button', { name: '导入材料', exact: true }).click()
   await page.getByLabel('来源 ID', { exact: true }).fill('user:browser-material')

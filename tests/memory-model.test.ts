@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { KnowledgeMemory } from '../packages/coach/lib/types/memory.js'
 import { Config } from '../packages/coach/src/config.ts'
-test('MemOS auxiliary calls use the owning DSH route and repeated review learning is idempotent', async (t) => {
+test('MemOS uses the owning DSH route, reports configured health and deduplicates learning across reload', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'dota-model-')),
     ctx = new Context()
   let calls = 0
@@ -46,11 +46,17 @@ test('MemOS auxiliary calls use the owning DSH route and repeated review learnin
       }
     },
   })
-  const memory = new KnowledgeMemory(ctx, home, Config({ memoryOffline: true }))
+  let memory = new KnowledgeMemory(ctx, home, Config({ memoryOffline: true }))
   t.after(async () => {
     await memory.dispose()
     await rm(home, { recursive: true, force: true })
   })
+  const health = await memory.request('health')
+  assert.equal(health.ok, true)
+  assert.equal(
+    (health.embedder as { model: string }).model,
+    'Xenova/paraphrase-multilingual-MiniLM-L12-v2',
+  )
   const exec = {
     agent: { options: { provider: 'fixture-provider', model: 'fixture-model' } },
   } as ToolRunContext
@@ -73,5 +79,11 @@ test('MemOS auxiliary calls use the owning DSH route and repeated review learnin
   const second = await memory.request('learn', { record }, exec)
   assert.equal(second.traceId, first.traceId)
   assert.equal(second.deduplicated, true)
+  assert.equal(calls, count)
+  await memory.dispose()
+  memory = new KnowledgeMemory(ctx, home, Config({ memoryOffline: true }))
+  const reloaded = await memory.request('learn', { record }, exec)
+  assert.equal(reloaded.traceId, first.traceId)
+  assert.equal(reloaded.deduplicated, true)
   assert.equal(calls, count)
 })

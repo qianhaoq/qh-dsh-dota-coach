@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import { BlockAssembler, createUserMessage, createAssistantMessage } from '@deepseek-ai/dsh-llm'
+import { CoachModel } from './model.ts'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { HostLlmCompleteInput, HostLlmCompletion } from '@memtensor/memos-local-plugin'
 import { CoachError, failure } from './errors.ts'
@@ -169,54 +169,17 @@ export class KnowledgeMemory {
       if (this.stopping) throw new CoachError('memory_unloaded', 'Memory is unloading')
       if (!route)
         throw new CoachError('model_route_missing', 'Run memory learning from a DSH conversation')
-      const llm = this.ctx.get('llm')
-      if (!llm) throw new CoachError('model_unavailable', 'DSH LLM service is unavailable')
-      const signal = AbortSignal.any([
+      const start = Date.now()
+      const text = await new CoachModel(this.ctx).messages(
+        route,
+        input.messages,
         controller.signal,
-        AbortSignal.timeout(input.timeoutMs || 45000),
-      ])
-      const info = await llm.resolveModelInfo(route.provider, route.model, signal)
-      const off = info.reasoning?.efforts.find((e) => e.id === 'off')
-      const prepared = await llm.prepareCall(
         {
-          ...route,
-          ...(off ? { reasoningEffort: off.id } : {}),
           maxTokens: input.maxTokens || 1024,
           temperature: input.temperature ?? 0,
+          timeoutMs: input.timeoutMs || 45000,
         },
-        signal,
       )
-      const source = { kind: 'dota-coach-memory' as const, form: 'notice' as const }
-      const messages = input.messages
-        .filter((m) => m.role !== 'system')
-        .map((m) =>
-          m.role === 'assistant'
-            ? createAssistantMessage({
-                content: [{ type: 'text', text: m.content }],
-                source: { provider: route.provider, model: route.model },
-              })
-            : createUserMessage({ content: [{ type: 'text', text: m.content }], source }),
-        )
-      const assembler = new BlockAssembler(),
-        start = Date.now()
-      for await (const chunk of prepared.stream({
-        ...prepared.config,
-        messages,
-        system: input.messages
-          .filter((m) => m.role === 'system')
-          .map((m) => m.content)
-          .join('\n'),
-        signal,
-      }))
-        assembler.push(chunk)
-      if (assembler.finish.kind !== 'stop')
-        throw new CoachError('memory_model_output', 'Memory model response was incomplete')
-      const text = assembler
-        .blocks()
-        .filter((b) => b.type === 'text')
-        .map((b) => b.text)
-        .join('')
-      if (!text.trim()) throw new CoachError('memory_model_output', 'Memory model returned no text')
       const value: HostLlmCompletion = { text, model: route.model, durationMs: Date.now() - start }
       this.worker.postMessage({ type: 'llm_result', id, value })
     } catch (error) {

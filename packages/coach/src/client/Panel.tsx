@@ -1,893 +1,1302 @@
-import { useState, useEffect, useRef } from 'react'
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PanelInjected } from './api.ts'
-import type { RecordValue, Json, TaskView } from '../types.ts'
-import type { Key } from './locales.ts'
+import type { RecordValue, Json } from '../types.ts'
+import type {
+  ReviewSession,
+  ReviewPreferences,
+  ReportDecision,
+  PracticeGoal,
+} from '../coaching-types.ts'
+import { Training } from './GuidedPanel.tsx'
+import { LegacyPanel } from './LegacyPanel.tsx'
+import { Icon } from './Icons.tsx'
+import { Conversation } from './Conversation.tsx'
+import { ReviewSurface, type InspectTarget } from './ReviewSurface.tsx'
+import { ReviewInspector } from './ReviewInspector.tsx'
+import { isConnectionError, errorMessage, readDraft, writeDraft } from './network.ts'
 type Props = PropsRuntime<'main'> & InjectFace<PanelInjected> & PropsLocale<'dotaCoach'>
 const rows = (v: Json | undefined): RecordValue[] =>
   Array.isArray(v)
     ? v.filter((r): r is RecordValue => !!r && typeof r === 'object' && !Array.isArray(r))
     : []
-const object = (v: Json | undefined): RecordValue =>
-  v && typeof v === 'object' && !Array.isArray(v) ? v : {}
-const field = (r: RecordValue, k: string): string =>
-  r[k] === null || r[k] === undefined
-    ? '—'
-    : typeof r[k] === 'string'
-      ? (r[k] as string)
-      : JSON.stringify(r[k])
-const time = (n: number) => `${Math.floor(n / 60)}:${String(Math.round(n % 60)).padStart(2, '0')}`
+const clock = (n: number) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`
+const dual = (v: string, en: boolean) => (en ? v.split(' / ').at(-1)! : v.split(' / ')[0]!)
+const image = (npc: string) =>
+  `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/${npc.replace('npc_dota_hero_', '')}.png`
+const defaults: ReviewPreferences = {
+  focus: [],
+  style: 'balanced',
+  detail: 'detailed',
+  intention: '',
+}
+const focusOptions = [
+  ['laning', '对线细节', 'Laning'],
+  ['farm', '发育转线', 'Economy'],
+  ['fight', '团战处理', 'Teamfights'],
+  ['items', '出装时机', 'Items'],
+  ['objectives', '地图目标', 'Objectives'],
+  ['support', '辅助职责', 'Support'],
+] as const
+class RenderBoundary extends Component<
+  { children: ReactNode; en: boolean },
+  { error: boolean; revision: number }
+> {
+  state = { error: false, revision: 0 }
+  static getDerivedStateFromError() {
+    return { error: true }
+  }
+  render() {
+    if (this.state.error)
+      return (
+        <section className="dc-app dc-render-error" role="alert">
+          <Icon name="refresh" />
+          <h2>{this.props.en ? 'This view could not be displayed.' : '此视图暂时无法显示'}</h2>
+          <p>
+            {this.props.en
+              ? 'Saved progress and local drafts are kept.'
+              : '已保存的复盘和本地草稿仍然保留。'}
+          </p>
+          <button
+            onClick={() => this.setState({ error: false, revision: this.state.revision + 1 })}
+          >
+            {this.props.en ? 'Restore view' : '恢复视图'}
+          </button>
+        </section>
+      )
+    return (
+      <div key={this.state.revision} className="dc-app-boundary">
+        {this.props.children}
+      </div>
+    )
+  }
+}
 export function Panel(p: Props) {
-  const { t } = p,
-    selection = p.useSelection((s) => s),
-    [tab, setTab] = useState<'matches' | 'review' | 'knowledge' | 'training'>('matches')
+  return (
+    <RenderBoundary en={p.t('title') === 'Dota coach'}>
+      <Workbench {...p} />
+    </RenderBoundary>
+  )
+}
+function Workbench(p: Props) {
+  const en = p.t('title') === 'Dota coach',
+    l = (zh: string, english: string) => (en ? english : zh),
+    selection = p.useSelection((s) => s)
+  const [view, setView] = useState<'review' | 'history' | 'tools'>('review'),
+    [session, setSession] = useState<ReviewSession | null>(null)
   const [account, setAccount] = useState(''),
     [match, setMatch] = useState(''),
-    [hero, setHero] = useState(''),
-    [result, setResult] = useState(''),
-    [matches, setMatches] = useState<RecordValue[]>([])
-  const [from, setFrom] = useState(0),
-    [to, setTo] = useState(180),
-    [timeline, setTimeline] = useState<RecordValue | null>(null),
-    [matchData, setMatchData] = useState<RecordValue | null>(null),
-    [positions, setPositions] = useState<RecordValue[]>([]),
-    [positionsTruncated, setPositionsTruncated] = useState(false),
-    [nextSourceOffset, setNextSourceOffset] = useState<number | null>(null),
-    [eventFilter, setEventFilter] = useState(''),
-    [question, setQuestion] = useState('')
-  const [knowledge, setKnowledge] = useState<RecordValue[]>([]),
-    [query, setQuery] = useState(''),
-    [mode, setMode] = useState<'lexical' | 'semantic' | 'sources'>('lexical'),
-    [detail, setDetail] = useState<RecordValue | null>(null),
-    [training, setTraining] = useState<RecordValue[]>([]),
-    [reviews, setReviews] = useState<RecordValue[]>([]),
-    [jobs, setJobs] = useState<TaskView[]>([])
-  const [error, setError] = useState(''),
-    [notice, setNotice] = useState(''),
-    [busy, setBusy] = useState(false),
-    [importing, setImporting] = useState(false),
-    [noteForm, setNoteForm] = useState(false)
-  const request = useRef(0),
-    mounted = useRef(true)
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      request.current++
-    }
-  }, [])
-  const run = async (f: () => Promise<void>) => {
-    setError('')
-    setNotice('')
-    setBusy(true)
-    try {
-      await f()
-    } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      if (mounted.current) setBusy(false)
-    }
+    [role, setRole] = useState(0),
+    [matches, setMatches] = useState<RecordValue[]>([]),
+    [history, setHistory] = useState<ReviewSession[]>([]),
+    [training, setTraining] = useState<RecordValue[]>([])
+  const [prefs, setPrefs] = useState<ReviewPreferences>(() => readDraft('preferences', defaults)),
+    [preferencesOpen, setPreferencesOpen] = useState(false),
+    [settings, setSettings] = useState(false)
+  const [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(''),
+    [offline, setOffline] = useState(false),
+    [stageIndex, setStageIndex] = useState(0),
+    [inspection, setInspection] = useState<InspectTarget | null>(null),
+    [replay, setReplay] = useState<ReportDecision | null>(null),
+    [discussionContext, setDiscussionContext] = useState<{
+      stage_id?: string
+      decision_id?: string
+      label: string
+    }>({ label: en ? 'Whole match' : '整局' })
+  const alive = useRef(true),
+    generation = useRef(0),
+    current = useRef<ReviewSession | null>(null),
+    selected = useRef(-1),
+    inflight = useRef(false),
+    prefsTouched = useRef(!!readDraft('preferences', null)),
+    offlineRef = useRef(false)
+  const accept = (s: ReviewSession) => {
+    if (!alive.current) return
+    current.current = s
+    setSession(s)
+    setRole(s.role)
   }
-  const call = async (name: Parameters<Props['call']>[0], args: RecordValue) => {
-    const r = await p.call(name, args)
-    if (!r.ok) throw new Error(String(r.detail || r.reason))
+  const fail = (e: unknown) => {
+    if (!alive.current) return
+    setError(errorMessage(e, en))
+    const lost = isConnectionError(e)
+    setOffline(lost)
+    offlineRef.current = lost
+  }
+  const call = async (a: RecordValue) => {
+    const r = await p.call('dota_coach', a)
+    if (!r.ok) throw Error(String(r.detail || r.reason || 'Request failed'))
     return r
   }
-  useEffect(() => {
-    void p.settings().then(
-      (s) => {
-        if (mounted.current) setAccount(s.accountId ? String(s.accountId) : '')
-      },
-      (e) => {
-        if (mounted.current) setError(String(e))
-      },
-    )
-  }, [p.settings])
-  useEffect(() => {
-    if (selection.matchId) {
-      setMatch(String(selection.matchId))
-      setTab('review')
-    }
-  }, [selection])
-  useEffect(() => {
-    if (tab === 'training')
-      void run(async () => {
-        const [a, b] = await Promise.all([
-          call('dota_training', { action: 'list' }),
-          call('dota_review', { action: 'list' }),
-        ])
-        setTraining(rows(a.items))
-        setReviews(rows(b.items))
-      })
-    if (tab === 'knowledge') void loadKnowledge()
-  }, [tab])
-  useEffect(() => {
-    if (tab !== 'review' || !selection.matchId) return
-    const id = ++request.current
-    void run(async () => {
-      const [a, b] = await Promise.all([
-        call('dota_timeline', { match_id: selection.matchId, from: String(from), to: String(to) }),
-        call('dota_match', {
-          match_id: selection.matchId,
-          sections: ['overview', 'players', 'curves'],
-        }),
-      ])
-      if (id !== request.current) return
-      setTimeline(a)
-      setMatchData(b)
-      if (a.trace_used) {
-        const trace = await call('dota_parse', {
-          action: 'positions',
-          match_id: selection.matchId,
-          from: String(from),
-          to: String(to),
-          step: 5,
-        })
-        if (id === request.current) {
-          setPositions(rows(trace.items))
-          setPositionsTruncated(trace.truncated === true)
-        }
-      } else {
-        setPositions([])
-        setPositionsTruncated(false)
+  const run = async (fn: () => Promise<void>) => {
+    if (inflight.current) return
+    inflight.current = true
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+      if (alive.current) {
+        setOffline(false)
+        offlineRef.current = false
       }
-    })
-    return () => {
-      request.current++
+    } catch (e) {
+      fail(e)
+    } finally {
+      inflight.current = false
+      if (alive.current) setBusy(false)
     }
-  }, [tab, selection.matchId, selection.revision, from, to])
+  }
+  const refresh = async (restore = true) => {
+    const token = generation.current
+    const [config, list, preferences, goals] = await Promise.all([
+      p.settings(),
+      call({ action: 'list' }),
+      call({ action: 'preferences' }),
+      p.call('dota_training', { action: 'list' }),
+    ])
+    if (!alive.current || token !== generation.current) return
+    setAccount(config.accountId ? String(config.accountId) : '')
+    setHistory(rows(list.items) as unknown as ReviewSession[])
+    setTraining(rows(goals.items))
+    if (!prefsTouched.current && preferences.preferences)
+      setPrefs(preferences.preferences as unknown as ReviewPreferences)
+    const id = current.current?.id || (restore && !selection.matchId ? list.active_id : null)
+    if (id) {
+      const r = await p.call('dota_coach', { action: 'open', id })
+      if (alive.current && token === generation.current) {
+        if (r.ok) accept(r.session as unknown as ReviewSession)
+        else if (r.reason === 'not_found') {
+          current.current = null
+          setSession(null)
+        } else throw Error(String(r.detail || r.reason))
+      }
+    }
+    setLoading(false)
+    setError('')
+    setOffline(false)
+    offlineRef.current = false
+    if (config.accountId)
+      try {
+        const recent = await p.call('dota_matches', { account: String(config.accountId), limit: 8 })
+        if (alive.current && token === generation.current) setMatches(rows(recent.items))
+      } catch (e) {
+        if (isConnectionError(e)) fail(e)
+      }
+  }
   useEffect(() => {
-    if (tab !== 'review') return
-    let active = true
-    const load = () =>
-      p.jobs().then(
-        (v) => {
-          if (active) setJobs(v)
-        },
-        () => {},
-      )
-    void load()
-    const timer = setInterval(load, 2000)
+    alive.current = true
+    void refresh()
+      .catch(fail)
+      .finally(() => {
+        if (alive.current) setLoading(false)
+      })
+    const retry = setInterval(() => {
+      if (offlineRef.current && !inflight.current) void run(() => refresh())
+    }, 5000)
     return () => {
-      active = false
-      clearInterval(timer)
+      alive.current = false
+      generation.current++
+      clearInterval(retry)
     }
-  }, [tab, p.jobs])
-  async function loadKnowledge() {
-    await run(async () => {
-      const r =
-        mode === 'semantic'
-          ? await call('dota_memory', { action: 'search', query })
-          : mode === 'sources'
-            ? await call('dota_source', { action: 'list', query })
-            : await call('dota_coach_note', { action: 'search', query })
-      setKnowledge(rows(r.items))
-      setDetail(null)
-    })
-  }
-  async function readSource(id: string, offset = 0, append = false) {
-    const v = await call('dota_source', { action: 'get', id, offset })
-    const record = object(v.record)
-    setDetail(
-      append ? { ...record, body: String(detail?.body || '') + String(record.body || '') } : record,
+  }, [])
+  useEffect(() => {
+    if (!loading && selection.matchId && selected.current !== selection.revision) {
+      selected.current = selection.revision
+      generation.current++
+      current.current = null
+      setSession(null)
+      setMatch(String(selection.matchId))
+      setView('review')
+      setReplay(null)
+      void begin(selection.matchId)
+    }
+  }, [selection, loading])
+  useEffect(() => {
+    if (
+      session?.phase !== 'preparing' &&
+      session?.presentation?.status !== 'pending' &&
+      !session?.discussion?.some((t) => t.status === 'pending')
     )
-    setNextSourceOffset(typeof v.next_offset === 'number' ? v.next_offset : null)
+      return
+    let live = true,
+      timer: ReturnType<typeof setTimeout>
+    const id = session.id,
+      token = generation.current
+    const poll = async () => {
+      try {
+        const r = await call({ action: 'get', id })
+        if (live && token === generation.current) {
+          accept(r.session as unknown as ReviewSession)
+          setError('')
+          setOffline(false)
+          offlineRef.current = false
+        }
+      } catch (e) {
+        if (live) fail(e)
+      } finally {
+        if (live) timer = setTimeout(poll, offlineRef.current ? 4000 : 1200)
+      }
+    }
+    timer = setTimeout(poll, 600)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [
+    session?.id,
+    session?.phase,
+    session?.presentation?.status,
+    session?.discussion?.some((t) => t.status === 'pending'),
+  ])
+  useEffect(() => {
+    if (
+      !session?.report ||
+      session.presentation ||
+      session.phase === 'preparing' ||
+      session.report.stages.some((s) => s.status !== 'ready') ||
+      session.report.stages.every((s) => s.ui)
+    )
+      return
+    const id = session.id
+    void run(async () => {
+      const r = await call({ action: 'presentation', id })
+      if (current.current?.id === id) accept(r.session as unknown as ReviewSession)
+    })
+  }, [session?.id, session?.phase, session?.presentation?.status])
+  useEffect(() => {
+    setStageIndex(0)
+    setInspection(null)
+    setReplay(null)
+    setDiscussionContext({ label: en ? 'Whole match' : '整局' })
+  }, [session?.id])
+  useEffect(() => {
+    document.getElementById('dc-current-stage')?.scrollIntoView({ block: 'start' })
+  }, [stageIndex])
+  const updatePrefs = (v: ReviewPreferences) => {
+    prefsTouched.current = true
+    setPrefs(v)
+    writeDraft('preferences', v)
   }
-  const submitReview = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const a = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
-    await run(async () => {
-      await call('dota_review', {
-        action: 'save',
-        match_id: Number(match),
-        from,
-        to,
-        title: a.title!,
-        body: a.body!,
-        learner_explanation: a.learner_explanation!,
-        evidence_ids: a
-          .evidence_ids!.split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        trigger: a.trigger!,
-        action_rule: a.action_rule!,
-        check_method: a.check_method!,
+  const home = () => {
+    generation.current++
+    current.current = null
+    setSession(null)
+    setView('review')
+    setError('')
+    setReplay(null)
+  }
+  const begin = (id: number, slot?: number) =>
+    void run(async () => {
+      if (!Number.isSafeInteger(id) || id <= 0)
+        throw Error(l('请输入有效的比赛 ID 或比赛链接。', 'Enter a valid match ID or match link.'))
+      const token = ++generation.current
+      await call({ action: 'preferences', preferences: JSON.parse(JSON.stringify(prefs)) })
+      const r = await call({
+        action: 'start',
+        match_id: id,
+        account_id: Number(account) || 0,
+        locale: en ? 'en' : 'zh',
+        format: 'report',
+        role,
+        preferences: JSON.parse(JSON.stringify(prefs)),
+        ...(slot === undefined ? {} : { player_slot: slot }),
         ...(selection.sessionId ? { session_id: selection.sessionId } : {}),
       })
-      setNotice(t('saved'))
+      if (token === generation.current) {
+        accept(r.session as unknown as ReviewSession)
+        setView('review')
+        setMatch(String(id))
+        setPreferencesOpen(false)
+      }
     })
-  }
-  const submitImport = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const a = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
-    await run(async () => {
-      await call('dota_source', { action: 'import', ...a, origin: 'user_import' })
-      setImporting(false)
-      setNotice(t('saved'))
-      await loadKnowledge()
+  const parseMatch = () =>
+    Number(match.trim().match(/(?:matches\/)?(\d{6,})(?:[/?#].*)?$/)?.[1] || match.trim())
+  const analyze = (useDraft = false) =>
+    void run(async () => {
+      if (!session) return
+      accept(
+        (
+          await call({
+            action: 'report',
+            id: session.id,
+            ...(useDraft ? { preferences: JSON.parse(JSON.stringify(prefs)) } : {}),
+          })
+        ).session as unknown as ReviewSession,
+      )
+      setPreferencesOpen(false)
     })
-  }
-  const submitNote = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const a = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
-    await run(async () => {
-      await call('dota_coach_note', { action: 'append', ...a })
-      setNoteForm(false)
-      setNotice(t('saved'))
-      await loadKnowledge()
+  const open = (s: ReviewSession) =>
+    void run(async () => {
+      generation.current++
+      accept((await call({ action: 'get', id: s.id })).session as unknown as ReviewSession)
+      setView('review')
     })
+  const report = session?.report,
+    stage = report?.stages[Math.min(stageIndex, report.stages.length - 1)],
+    preparing = session?.phase === 'preparing',
+    selectedPrefs = report?.preferences
+  const reportReady = !!report && !preparing && report.stages.every((s) => s.status === 'ready')
+  const askAbout = (stage_id?: string, decision_id?: string, label = l('整局', 'Whole match')) => {
+    setDiscussionContext({ stage_id, decision_id, label })
+    document
+      .getElementById('dc-coach-conversation')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
-  const label = (key: Key, name: string, type = 'text', value?: string) => (
-    <label key={name}>
-      {t(key)}
-      <input name={name} type={type} defaultValue={value} required />
-    </label>
-  )
-  const events = rows(timeline?.events).filter((e) => !eventFilter || e.kind === eventFilter)
-  const kinds = [...new Set(rows(timeline?.events).map((e) => String(e.kind)))]
-  const curves = { points: matchData?.curves || [] } as RecordValue
+  const readable = (v: string) =>
+    v
+      .replaceAll('razor_plasma_field', l('等离子场', 'Plasma Field'))
+      .replaceAll('razor_static_link', l('静电连接', 'Static Link'))
+      .replaceAll('razor_eye_of_the_storm', l('风暴之眼', 'Eye of the Storm'))
+      .replaceAll('item_magic_wand', l('魔棒', 'Magic Wand'))
+      .replaceAll('item_faerie_fire', l('仙灵之火', 'Faerie Fire'))
+      .replaceAll('item_black_king_bar', l('黑皇杖', 'Black King Bar'))
+      .replaceAll('item_famango', l('芒果', 'Enchanted Mango'))
+      .replaceAll('item_power_treads', l('动力鞋', 'Power Treads'))
+      .replaceAll('item_tpscroll', l('回城卷轴', 'Town Portal Scroll'))
+      .replaceAll('item_guardian_greaves', l('卫士胫甲', 'Guardian Greaves'))
+      .replaceAll('item_satanic', l('撒旦之邪力', 'Satanic'))
+      .replaceAll('item_lifesteal', l('攻击吸血', 'Attack lifesteal'))
+      .replaceAll('item_blink', l('闪烁匕首', 'Blink Dagger'))
+      .replaceAll('item_blade_mail', l('刃甲', 'Blade Mail'))
+      .replaceAll('item_shivas_guard', l('希瓦的守护', "Shiva's Guard"))
+      .replaceAll('dota_unknown', l('来源未明确', 'Unknown source'))
+      .replaceAll('雷泽', en ? 'Razor' : '剃刀')
+      .replace(
+        /npc_dota_hero_([a-z_]+)/g,
+        (_, npc: string) =>
+          session?.players.find((p) => p.npc === npc)?.hero || npc.replaceAll('_', ' '),
+      )
+      .replace(
+        /npc_dota_(goodguys|badguys)_tower([1-4])_(top|mid|bot)/g,
+        (_, team: string, tier: string, lane: string) =>
+          en
+            ? `${team === 'goodguys' ? 'Radiant' : 'Dire'} ${lane} tier ${tier} tower`
+            : `${team === 'goodguys' ? '天辉' : '夜魇'}${({ top: '上', mid: '中', bot: '下' } as Record<string, string>)[lane]}路${tier}塔`,
+      )
+      .replaceAll('building_kill', l('建筑被摧毁', 'Building destroyed'))
+  if (view === 'tools')
+    return (
+      <div className="dc-secondary">
+        <button
+          className="dc-return"
+          onClick={() => {
+            setView('review')
+            void run(() => refresh())
+          }}
+        >
+          <Icon name="back" />
+          {l('返回整局复盘', 'Back to match review')}
+        </button>
+        <LegacyPanel {...p} />
+      </div>
+    )
   return (
-    <div className="dota-coach">
-      <header>
-        <div>
-          <span className="dota-eyebrow">DSH · DOTA 2</span>
-          <h1>{t('title')}</h1>
-          <p>{t('subtitle')}</p>
-        </div>
-        <span className="dota-emblem" aria-hidden>
-          ◈
-        </span>
-      </header>
-      <nav role="tablist" aria-label={t('title')}>
-        {(['matches', 'review', 'knowledge', 'training'] as const).map((k) => (
-          <button role="tab" key={k} aria-selected={tab === k} onClick={() => setTab(k)}>
-            {t(k)}
+    <div className="dc-app" data-testid="coach-workbench">
+      <header className="dc-topbar">
+        <button
+          className="dc-wordmark"
+          onClick={home}
+          aria-label={l('Dota Coach 首页', 'Dota Coach home')}
+        >
+          <span className="dc-logo">
+            <Icon name="mark" size={27} />
+          </span>
+          <span>
+            DOTA<span className="dc-wordmark-light"> / COACH</span>
+          </span>
+        </button>
+        <nav aria-label={l('主导航', 'Main navigation')}>
+          <button
+            aria-current={view === 'review' ? 'page' : undefined}
+            onClick={() => setView('review')}
+          >
+            {l('复盘', 'Review')}
           </button>
-        ))}
-      </nav>
+          <button
+            aria-current={view === 'history' ? 'page' : undefined}
+            onClick={() => {
+              setView('history')
+              void run(() => refresh(false))
+            }}
+          >
+            {l('我的练习', 'My practice')}
+          </button>
+        </nav>
+        <div className="dc-top-end">
+          <button title={l('资料与高级工具', 'Library & tools')} onClick={() => setView('tools')}>
+            <Icon name="book" />
+            <span>{l('资料库', 'Library')}</span>
+          </button>
+          <button aria-expanded={settings} onClick={() => setSettings(!settings)}>
+            <Icon name="sliders" />
+            <span>{l('设置', 'Settings')}</span>
+          </button>
+        </div>
+      </header>
+      {settings && (
+        <form
+          className="dc-account"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void run(async () => {
+              const id = Number(account)
+              if (!Number.isSafeInteger(id) || id < 0 || id > 4294967295)
+                throw Error(l('请输入有效的账号 ID', 'Enter a valid account ID'))
+              await p.settings(id)
+              await refresh(false)
+              setSettings(false)
+            })
+          }}
+        >
+          <label>
+            {l('OpenDota 账号 ID', 'OpenDota account ID')}
+            <input
+              inputMode="numeric"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+            />
+          </label>
+          <button className="dc-primary" disabled={busy}>
+            {l('保存设置', 'Save settings')}
+          </button>
+          <button type="button" onClick={() => setSettings(false)}>
+            {l('取消', 'Cancel')}
+          </button>
+        </form>
+      )}
       {error && (
-        <div role="alert" className="dota-error">
-          {t('error')}: {error}
+        <div className="dc-notice" role="alert">
+          <Icon name={offline ? 'signal' : 'focus'} />
+          <span>{error}</span>
+          <button disabled={busy} onClick={() => void run(() => refresh())}>
+            <Icon name="refresh" />
+            {l('重新连接并恢复', 'Reconnect & restore')}
+          </button>
         </div>
       )}
-      {notice && (
-        <div role="status" className="dota-notice">
-          {notice}
-        </div>
-      )}
-      {busy && (
-        <div role="status" className="dota-loading">
-          {t('loading')}
-        </div>
-      )}
-      <main aria-busy={busy}>
-        {tab === 'matches' && (
-          <>
-            <section className="dota-card">
-              <h2>{t('account')}</h2>
-              <div className="dota-row">
-                <input
-                  aria-label={t('account')}
-                  value={account}
-                  onChange={(e) => setAccount(e.target.value)}
-                  inputMode="numeric"
-                />
-                <button
-                  onClick={() =>
-                    void run(async () => {
-                      await p.settings(Number(account))
-                      setNotice(t('saved'))
-                    })
-                  }
-                >
-                  {t('save')}
-                </button>
-                <input
-                  aria-label={t('hero')}
-                  placeholder={t('hero')}
-                  value={hero}
-                  onChange={(e) => setHero(e.target.value)}
-                />
-                <select
-                  aria-label={t('result')}
-                  value={result}
-                  onChange={(e) => setResult(e.target.value)}
-                >
-                  <option value="">{t('all')}</option>
-                  <option value="win">{t('win')}</option>
-                  <option value="loss">{t('loss')}</option>
-                </select>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      const r = await call('dota_matches', {
-                        account,
-                        limit: 30,
-                        ...(hero ? { hero } : {}),
-                        ...(result ? { result } : {}),
-                      })
-                      setMatches(rows(r.items))
-                    })
-                  }
-                >
-                  {t('load')}
-                </button>
+      <main className="dc-main">
+        {view === 'history' ? (
+          <section className="dc-history">
+            <div className="dc-review-section-heading">
+              <div>
+                <span className="dc-kicker">YOUR PROGRESS</span>
+                <h1>{l('把理解，变成习惯。', 'Turn understanding into a habit.')}</h1>
               </div>
-              <p>{t('noAccount')}</p>
-            </section>
-            <section className="dota-card">
-              <div className="dota-row">
-                <input
-                  aria-label={t('match')}
-                  placeholder={t('match')}
-                  value={match}
-                  onChange={(e) => setMatch(e.target.value)}
-                  inputMode="numeric"
-                />
-                <button
-                  onClick={() => {
-                    if (Number(match) > 0) p.select(Number(match))
-                  }}
-                >
-                  {t('open')}
-                </button>
-              </div>
-              <div className="dota-match-list">
-                {matches.map((r) => (
-                  <button
-                    className="dota-match"
-                    key={field(r, 'match_id')}
-                    onClick={() => p.select(Number(r.match_id))}
-                  >
-                    <strong>{field(r, 'hero')}</strong>
-                    <span className={r.result === 'win' ? 'dota-win' : 'dota-loss'}>
-                      {r.result === 'win' ? t('win') : t('loss')}
-                    </span>
-                    <span>{field(r, 'kda')}</span>
-                    <span>{field(r, 'duration')}</span>
-                    <small>#{field(r, 'match_id')}</small>
-                  </button>
-                ))}
-              </div>
-              {!matches.length && <Empty text={t('empty')} />}
-            </section>
-          </>
-        )}
-        {tab === 'review' && (
-          <>
-            <section className="dota-card">
-              <div className="dota-row">
-                <label>
-                  {t('match')}
-                  <input value={match} onChange={(e) => setMatch(e.target.value)} />
-                </label>
-                <button onClick={() => p.select(Number(match))}>{t('load')}</button>
-                <label>
-                  {t('from')}
-                  <input
-                    type="number"
-                    value={from}
-                    onChange={(e) => setFrom(Number(e.target.value))}
+              <button onClick={home}>
+                {l('复盘新的一局', 'Review another match')}
+                <Icon name="arrow" />
+              </button>
+            </div>
+            <div className="dota-workbench dc-training-list">
+              {training.length ? (
+                training.map((t) => (
+                  <Training
+                    key={String(t.id)}
+                    row={t}
+                    en={en}
+                    call={p.call}
+                    refresh={() => void run(() => refresh(false))}
                   />
-                </label>
-                <label>
-                  {t('to')}
-                  <input type="number" value={to} onChange={(e) => setTo(Number(e.target.value))} />
-                </label>
-              </div>
-              <div className="dota-row">
-                <button
-                  disabled={!selection.matchId || busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await call('dota_replay', { action: 'fetch', match_id: Number(match) })
-                      setNotice(t('saved'))
-                    })
-                  }
-                >
-                  {t('download')}
-                </button>
-                <button
-                  disabled={!selection.matchId || busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await call('dota_parse', { action: 'summary', match_id: Number(match) })
-                      p.select(Number(match))
-                    })
-                  }
-                >
-                  {t('parse')}
-                </button>
-              </div>
-              {timeline && (
-                <p>
-                  {t('source')}: {field(timeline, 'source')} · {t('evidence')}:{' '}
-                  {field(timeline, 'evidence_id')}
+                ))
+              ) : (
+                <p className="dc-review-muted">
+                  {l(
+                    '复盘后选择一项练习，这里会记录你的进步。',
+                    'Choose one practice goal after a review to track it here.',
+                  )}
                 </p>
               )}
-              {jobs.length > 0 && (
-                <details>
-                  <summary>{t('jobs')}</summary>
-                  {jobs.map((j) => (
-                    <div className="dota-row" key={j.id}>
-                      {j.tool} · {j.status}
-                      {j.status === 'running' && (
-                        <button onClick={() => void p.cancel(j.id)}>{t('cancel')}</button>
-                      )}
-                    </div>
-                  ))}
-                </details>
-              )}
-            </section>
-            <div className="dota-grid">
-              <section className="dota-card">
-                <h2>{t('economy')}</h2>
-                <Economy data={curves} from={from} to={to} label={t('economy')} />
-                {Array.isArray(matchData?.missing) && (
-                  <small>
-                    {t('missing')}: {matchData.missing.map(String).join(', ') || '—'}
-                  </small>
-                )}
-              </section>
-              <section className="dota-card">
-                <h2>{t('map')}</h2>
-                <BattleMap positions={positions} from={from} to={to} label={t('map')} />
-                {!positions.length && <p>{t('noTrace')}</p>}
-                {positionsTruncated && <p>{t('truncated')}</p>}
-                <small>{t('observation')}</small>
-              </section>
             </div>
-            <section className="dota-card">
-              <div className="dota-row">
-                <h2>{t('timeline')}</h2>
-                <select
-                  aria-label={t('filter')}
-                  value={eventFilter}
-                  onChange={(e) => setEventFilter(e.target.value)}
-                >
-                  <option value="">{t('all')}</option>
-                  {kinds.map((k) => (
-                    <option key={k}>{k}</option>
-                  ))}
-                </select>
-              </div>
-              {timeline?.truncated === true && <p>{t('truncated')}</p>}
-              {!events.length && <Empty text={t('empty')} />}
-              <ol className="dota-events">
-                {events.map((e, i) => (
-                  <li key={`${e.t}-${i}`}>
-                    <time>{time(Number(e.t))}</time>
-                    <strong>{field(e, 'kind')}</strong>
-                    <span>{field(e, 'detail')}</span>
-                    <small>{field(e, 'by')}</small>
-                  </li>
-                ))}
-              </ol>
-            </section>
-            <section className="dota-card">
-              <h2>{t('ask')}</h2>
-              <textarea
-                aria-label={t('question')}
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                placeholder={t('question')}
-              />
-              <button
-                onClick={() =>
-                  void run(async () => {
-                    await p.draft(
-                      `${t('title')} · match_id=${match} · ${from}–${to}s\nevidence_id=${timeline?.evidence_id || ''}\n${question}`,
-                    )
-                    setNotice(t('draft'))
-                  })
-                }
-              >
-                {t('ask')}
-              </button>
-            </section>
-            <section className="dota-card">
-              <h2>{t('saveReview')}</h2>
-              <form onSubmit={submitReview}>
-                <div className="dota-grid">
-                  {label('reviewTitle', 'title')}
-                  {label('explanation', 'learner_explanation')}
-                  {label('trigger', 'trigger')}
-                  {label('action', 'action_rule')}
-                  {label('check', 'check_method')}
-                  {label(
-                    'evidenceIds',
-                    'evidence_ids',
-                    'text',
-                    String(timeline?.evidence_id || ''),
-                  )}
-                </div>
-                <label>
-                  {t('rule')}
-                  <textarea name="body" required />
-                </label>
-                <button disabled={busy || !timeline}>{t('saveReview')}</button>
-              </form>
-            </section>
-          </>
-        )}
-        {tab === 'knowledge' && (
-          <>
-            <section className="dota-card">
-              <div className="dota-row">
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  aria-label={t('query')}
-                  placeholder={t('query')}
-                />
-                <select
-                  aria-label={t('search')}
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as typeof mode)}
-                >
-                  {(['lexical', 'semantic', 'sources'] as const).map((k) => (
-                    <option key={k} value={k}>
-                      {t(k)}
-                    </option>
-                  ))}
-                </select>
-                <button disabled={busy} onClick={() => void loadKnowledge()}>
-                  {t('search')}
-                </button>
-                <button onClick={() => setImporting(!importing)}>{t('import')}</button>
-                <button onClick={() => setNoteForm(!noteForm)}>{t('appendNote')}</button>
-              </div>
-              <p>{t('memoryHint')}</p>
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    let offset = 0
-                    for (;;) {
-                      const r = object(
-                        (await call('dota_memory', { action: 'reindex', offset })).result,
-                      )
-                      if (r.done) break
-                      offset = Number(r.nextOffset)
-                      if (!Number.isFinite(offset)) break
-                    }
-                    setNotice(t('saved'))
-                  })
-                }
-              >
-                {t('index')}
-              </button>
-            </section>
-            {importing && (
-              <section className="dota-card">
-                <h2>{t('import')}</h2>
-                <p>{t('noProvider')}</p>
-                <form onSubmit={submitImport}>
-                  <div className="dota-grid">
-                    {label('sourceId', 'source_id')}
-                    {label('sourceTitle', 'title')}
-                    {label('locator', 'locator')}
-                    {label('patch', 'patch', 'text', 'unknown')}
-                  </div>
-                  <label>
-                    {t('body')}
-                    <textarea name="body" required rows={8} />
-                  </label>
-                  <button disabled={busy}>{t('save')}</button>
-                </form>
-              </section>
-            )}
-            {noteForm && (
-              <section className="dota-card">
-                <form onSubmit={submitNote}>
-                  <div className="dota-grid">
-                    {label('sourceTitle', 'title')}
-                    {label('noteSource', 'source_record_id')}
-                    {label('sourceId', 'source_id')}
-                    {label('stamp', 'stamp')}
-                    {label('patch', 'patch', 'text', 'unknown')}
-                    <label>
-                      {t('noteKind')}
-                      <select name="kind">
-                        <option value="principle">{t('principle')}</option>
-                        <option value="fact">{t('supported')}</option>
-                        <option value="counterexample">{t('counterexample')}</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label>
-                    {t('body')}
-                    <textarea name="body" required />
-                  </label>
-                  <button disabled={busy}>{t('save')}</button>
-                </form>
-              </section>
-            )}
-            <div className="dota-grid">
-              <section className="dota-card">
-                {!knowledge.length && <Empty text={t('noKnowledge')} />}
-                <div className="dota-knowledge-list">
-                  {knowledge.map((r, i) => {
-                    const record = object(r.record || r)
-                    return (
-                      <button
-                        key={String(r.id || r.refId || i)}
-                        onClick={() =>
-                          void run(async () => {
-                            if (r.candidate) {
-                              setDetail(r)
-                              return
-                            }
-                            const id = String(record.id || r.id)
-                            const v = await call(
-                              record.kind === 'source' || mode === 'sources'
-                                ? 'dota_source'
-                                : record.kind === 'review'
-                                  ? 'dota_review'
-                                  : record.kind === 'training'
-                                    ? 'dota_training'
-                                    : 'dota_coach_note',
-                              { action: 'get', id },
-                            )
-                            setDetail(object(v.record))
-                            setNextSourceOffset(
-                              typeof v.next_offset === 'number' ? v.next_offset : null,
-                            )
-                          })
-                        }
-                      >
-                        <strong>{field(record, 'title')}</strong>
-                        <small>
-                          {r.candidate
-                            ? t('candidate')
-                            : record.needs_recheck
-                              ? t('recheck')
-                              : field(record, 'patch')}
-                        </small>
-                        <p>{String(r.snippet || record.body || '').slice(0, 150)}</p>
-                      </button>
-                    )
-                  })}
-                </div>
-              </section>
-              <section className="dota-card">
-                {detail ? (
-                  <>
-                    <h2>{field(detail, 'title')}</h2>
-                    <p>
-                      {t('status')}: {field(detail, 'evidence_status')} · {t('applicability')}:{' '}
-                      {field(detail, 'applicability')}
-                    </p>
-                    <p>
-                      {t('source')}: {field(detail, 'source_id')} · {field(detail, 'locator')}
-                    </p>
-                    <pre className="dota-body">
-                      {String(detail.body || detail.snippet || JSON.stringify(detail, null, 2))}
-                    </pre>
-                    {nextSourceOffset !== null && detail.kind === 'source' && (
-                      <button
-                        onClick={() =>
-                          void run(() => readSource(String(detail.id), nextSourceOffset, true))
-                        }
-                      >
-                        {t('moreSource')}
-                      </button>
-                    )}
-                    {typeof detail.source_record_id === 'string' && (
-                      <button
-                        onClick={() =>
-                          void run(async () => readSource(String(detail.source_record_id)))
-                        }
-                      >
-                        {t('sourceBody')}
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <Empty text={t('details')} />
-                )}
-              </section>
-            </div>
-          </>
-        )}
-        {tab === 'training' && (
-          <>
-            <p>{t('reported')}</p>
-            {!training.length && <Empty text={t('noTraining')} />}
-            <div className="dota-grid">
-              {training.map((r) => (
-                <section className="dota-card" key={field(r, 'id')}>
-                  <span className="dota-eyebrow">
-                    {t((r.status || 'active') as 'active' | 'paused' | 'completed')}
+            <h2>{l('复盘记录', 'Review history')}</h2>
+            <div className="dc-session-list">
+              {history.map((s) => (
+                <button key={s.id} onClick={() => open(s)}>
+                  <span>
+                    {s.player?.hero || l('待选择英雄', 'Choose hero')} <small>#{s.match_id}</small>
                   </span>
-                  <h2>{field(r, 'title')}</h2>
-                  <dl>
-                    {(['trigger', 'action_rule', 'check_method'] as const).map((k, i) => (
-                      <div key={k}>
-                        <dt>{t((['trigger', 'action', 'check'] as const)[i]!)}</dt>
-                        <dd>{field(r, k)}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <select
-                    aria-label={t('status')}
-                    value={String(r.status)}
-                    onChange={(e) =>
-                      void run(async () => {
-                        const v = await call('dota_training', {
-                          action: 'update',
-                          id: r.id!,
-                          status: e.target.value,
-                        })
-                        setTraining(training.map((x) => (x.id === r.id ? object(v.record) : x)))
-                      })
-                    }
-                  >
-                    {(['active', 'paused', 'completed'] as const).map((k) => (
-                      <option key={k} value={k}>
-                        {t(k)}
-                      </option>
-                    ))}
-                  </select>
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault()
-                      const a = Object.fromEntries(new FormData(e.currentTarget)) as Record<
-                        string,
-                        string
-                      >
-                      void run(async () => {
-                        const v = await call('dota_training', {
-                          action: 'checkin',
-                          id: r.id!,
-                          match_id: Number(a.match_id),
-                          body: a.body!,
-                          completed: a.completed === 'on',
-                        })
-                        setTraining(training.map((x) => (x.id === r.id ? object(v.record) : x)))
-                      })
-                    }}
-                  >
-                    {label('match', 'match_id', 'number')}
-                    <label>
-                      {t('report')}
-                      <textarea name="body" required />
-                    </label>
-                    <label className="dota-row">
-                      <input type="checkbox" name="completed" />
-                      {t('didComplete')}
-                    </label>
-                    <button disabled={busy}>{t('checkin')}</button>
-                  </form>
-                  <details>
-                    <summary>
-                      {t('checkin')} ({rows(r.checkins).length})
-                    </summary>
-                    {rows(r.checkins).map((c, i) => (
-                      <p key={i}>
-                        #{field(c, 'match_id')} · {field(c, 'body')} · {field(c, 'at')}
-                      </p>
-                    ))}
-                  </details>
-                </section>
+                  <span>
+                    {s.format === 'report'
+                      ? l('整局复盘', 'Match report')
+                      : l('提问式复盘', 'Guided review')}
+                    <Icon name="arrow" />
+                  </span>
+                </button>
               ))}
             </div>
-            <section className="dota-card">
-              <h2>{t('records')}</h2>
-              {reviews.map((r) => (
-                <div className="dota-row" key={field(r, 'id')}>
-                  <strong>{field(r, 'title')}</strong>
-                  <button onClick={() => p.select(Number(r.match_id))}>{t('open')}</button>
+          </section>
+        ) : !session ? (
+          <section className="dc-home">
+            <div className="dc-home-intro">
+              <span className="dc-kicker">
+                <span className="dc-live-dot" /> AI REPLAY COACH
+              </span>
+              <h1>
+                {l('看懂这一局。', 'Understand this game.')}
+                <br />
+                <span>{l('下一局，做得更好。', 'Make the next one better.')}</span>
+              </h1>
+              <p>
+                {l(
+                  '从你的实际选择出发，找到更适合你的打法。',
+                  'Start with your actual decisions. Find a way to play that fits you.',
+                )}
+              </p>
+            </div>
+            <form
+              className="dc-match-form"
+              onSubmit={(e) => {
+                e.preventDefault()
+                begin(parseMatch())
+              }}
+            >
+              <Icon name="focus" size={22} />
+              <input
+                aria-label={l('比赛 ID 或链接', 'Match ID or link')}
+                placeholder={l(
+                  '输入比赛 / 录像编号，或粘贴比赛链接',
+                  'Enter a match / replay ID, or a match link',
+                )}
+                value={match}
+                onChange={(e) => setMatch(e.target.value)}
+                autoComplete="off"
+              />
+              <button className="dc-primary" disabled={busy || offline || loading}>
+                {busy ? l('正在连接…', 'Connecting…') : l('开始复盘', 'Review match')}
+                <Icon name="arrow" />
+              </button>
+            </form>
+            <div className="dc-home-options">
+              <button
+                aria-expanded={preferencesOpen}
+                onClick={() => setPreferencesOpen(!preferencesOpen)}
+              >
+                <Icon name="sliders" />
+                {l('复盘偏好', 'Review preferences')}
+                <span className="dc-count">
+                  {prefs.focus.length ? prefs.focus.length : l('全面', 'All')}
+                </span>
+              </button>
+              <span>
+                {prefs.detail === 'detailed'
+                  ? l('逐阶段详细分析', 'Detailed, phase by phase')
+                  : l('重点概览', 'Focused overview')}{' '}
+                · {l('使用 DSH 当前模型', 'Uses your DSH model')}
+              </span>
+            </div>
+            {preferencesOpen && (
+              <Preferences
+                en={en}
+                value={prefs}
+                update={updatePrefs}
+                role={role}
+                setRole={setRole}
+              />
+            )}
+            <div className="dc-recent-head">
+              <h2>{l('最近的比赛', 'Recent matches')}</h2>
+              <span>
+                {loading
+                  ? l('正在恢复…', 'Restoring…')
+                  : account
+                    ? l('选择一局，即可开始', 'Pick a game to begin')
+                    : l(
+                        '在设置中关联账号，可显示最近比赛',
+                        'Add your account in Settings to show matches',
+                      )}
+              </span>
+            </div>
+            <div className="dc-match-list">
+              {matches.slice(0, 6).map((m) => (
+                <button
+                  key={String(m.match_id)}
+                  disabled={busy || offline}
+                  onClick={() => begin(Number(m.match_id))}
+                >
+                  <img src={image(String(m.npc || 'juggernaut'))} alt="" />
+                  <span>
+                    <strong>{String(m.hero || m.hero_name || 'Dota 2')}</strong>
+                    <small>#{String(m.match_id)}</small>
+                  </span>
+                  <span className="dc-match-result" data-win={m.result === 'win'}>
+                    {m.result === 'win'
+                      ? l('胜利', 'Won')
+                      : m.result === 'loss'
+                        ? l('失利', 'Lost')
+                        : '—'}
+                  </span>
+                  <span className="dc-match-kda">{String(m.kda || '—')}</span>
+                  <Icon name="arrow" />
+                </button>
+              ))}
+            </div>
+            <div className="dc-home-foot">
+              <span>
+                {l(
+                  '以录像为依据，建议有条件，练习有重点。',
+                  'Grounded in replays. Conditional advice. Focused practice.',
+                )}
+              </span>
+              <span>
+                {l(
+                  '一次处理，完整复盘，随时追问。',
+                  'One analysis. A complete review. Keep the conversation going.',
+                )}
+              </span>
+            </div>
+          </section>
+        ) : (
+          <section className="dc-review">
+            <div className="dc-review-top">
+              <button onClick={home}>
+                <Icon name="back" />
+                {l('其他比赛', 'Other matches')}
+              </button>
+              <div>
+                <button
+                  disabled={preparing}
+                  aria-expanded={preferencesOpen}
+                  onClick={() => {
+                    setPreferencesOpen(!preferencesOpen)
+                  }}
+                >
+                  <Icon name="sliders" />
+                  {l('调整偏好', 'Preferences')}
+                </button>
+              </div>
+            </div>
+            <header className="dc-match-heading">
+              {session.player && <img src={image(session.player.npc)} alt={session.player.hero} />}
+              <div>
+                <span className="dc-kicker">
+                  MATCH REVIEW <span>#{session.match_id}</span>
+                </span>
+                <h1>
+                  {session.player?.hero || l('这局你使用了哪位英雄？', 'Which hero did you play?')}
+                </h1>
+                <p>
+                  {session.role
+                    ? `${session.role} ${l('号位', 'position')}`
+                    : l('位置待确认', 'Role unconfirmed')}{' '}
+                  · {l('版本', 'Patch')} {session.patch === 'unknown' ? '—' : session.patch}
+                  {report ? ` · ${clock(report.duration)}` : ''}
+                  {session.model ? ` · ${session.model}` : ''}
+                </p>
+              </div>
+              {session.player && reportReady && (
+                <button className="dc-open-match" onClick={() => setInspection({ mode: 'match' })}>
+                  <Icon name="focus" size={15} />
+                  {l('对局详情', 'Match details')}
+                </button>
+              )}
+              <span className="dc-report-label">
+                <span className="dc-live-dot" />
+                {l('AI 教练复盘', 'AI COACH REVIEW')}
+              </span>
+            </header>
+            {preferencesOpen && (
+              <div className="dc-preferences-wrap">
+                <Preferences
+                  en={en}
+                  value={prefs}
+                  update={updatePrefs}
+                  role={role}
+                  setRole={setRole}
+                />
+                <div className="dc-preferences-actions">
+                  <p>
+                    {l(
+                      '应用偏好后会自动更新这份分析，后续问题也可直接问教练。',
+                      'Apply preferences to update the analysis automatically, or ask the coach below.',
+                    )}
+                  </p>
                   <button
+                    className="dc-primary"
+                    disabled={busy || preparing || offline}
                     onClick={() =>
-                      void run(() => p.draft(`${t('learnPrompt')}\nrecord_id=${r.id}`))
+                      session.role !== role
+                        ? begin(session.match_id, session.player?.slot)
+                        : analyze(true)
                     }
                   >
-                    {t('learn')}
+                    {l('应用偏好', 'Apply preferences')}
+                    <Icon name="arrow" />
                   </button>
                 </div>
-              ))}
-            </section>
-          </>
+              </div>
+            )}
+            {session.stage === 'choose_player' ? (
+              <div className="dc-player-picker">
+                {session.players.map((player) => (
+                  <button
+                    key={player.slot}
+                    disabled={busy || offline}
+                    onClick={() => begin(session.match_id, player.slot)}
+                  >
+                    <img src={image(player.npc)} alt="" />
+                    <span>
+                      {player.hero}
+                      <small>{player.team === 2 ? l('天辉', 'Radiant') : l('夜魇', 'Dire')}</small>
+                    </span>
+                    <Icon name="arrow" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                {selectedPrefs && (
+                  <div className="dc-applied-preferences">
+                    <Icon name="focus" />
+                    {(selectedPrefs.focus.length
+                      ? focusOptions
+                          .filter(([k]) => selectedPrefs.focus.includes(k))
+                          .map((v) => (en ? v[2] : v[1]))
+                      : [l('全面复盘', 'All phases')]
+                    ).join(' · ')}
+                    <span>
+                      {selectedPrefs.style === 'safe'
+                        ? l('稳健优先', 'Safety first')
+                        : selectedPrefs.style === 'tempo'
+                          ? l('主动节奏', 'Proactive tempo')
+                          : l('均衡取舍', 'Balanced tradeoffs')}
+                    </span>
+                    {selectedPrefs.intention && (
+                      <details>
+                        <summary>{l('我的补充', 'My context')}</summary>
+                        <p>{selectedPrefs.intention}</p>
+                      </details>
+                    )}
+                  </div>
+                )}
+                {preparing && (
+                  <div className="dc-progress" role="status">
+                    <span className="dc-spinner" />
+                    <div>
+                      <strong>
+                        {report
+                          ? l('逐阶段推敲你的选择', 'Reviewing decisions, phase by phase')
+                          : session.stage === 'replay'
+                            ? l('正在准备录像', 'Preparing the replay')
+                            : l('正在整理比赛证据', 'Collecting match evidence')}
+                      </strong>
+                      <p>
+                        {report
+                          ? `${report.stages.filter((s) => s.status === 'ready').length} / ${report.stages.length} ${l('阶段完成，全部完成后自动展示结论', 'phases complete. The full conclusions will open automatically.')}`
+                          : l(
+                              '正在自动拉取、解析录像并分析；完成后会直接打开完整结论。',
+                              'Fetching, parsing and analyzing automatically. The complete report opens when ready.',
+                            )}
+                      </p>
+                    </div>
+                    <button
+                      disabled={busy || offline}
+                      onClick={() =>
+                        void run(async () =>
+                          accept(
+                            (await call({ action: 'cancel', id: session.id }))
+                              .session as unknown as ReviewSession,
+                          ),
+                        )
+                      }
+                    >
+                      {l('暂停', 'Pause')}
+                    </button>
+                  </div>
+                )}
+                {(session.error || session.phase === 'cancelled' || session.phase === 'failed') && (
+                  <div className="dc-notice" role="alert">
+                    <span>
+                      {session.error
+                        ? errorMessage(session.error, en)
+                        : l(
+                            '分析已暂停，已完成的内容仍保留。',
+                            'Analysis paused. Completed sections are kept.',
+                          )}
+                    </span>
+                    <button
+                      disabled={busy || offline}
+                      onClick={() =>
+                        report ? analyze() : begin(session.match_id, session.player?.slot)
+                      }
+                    >
+                      {l('继续分析', 'Resume analysis')}
+                    </button>
+                  </div>
+                )}
+                {report && !preparing && !reportReady && session.phase !== 'cancelled' && (
+                  <div className="dc-progress dc-processing-error">
+                    <Icon name="focus" />
+                    <div>
+                      <strong>
+                        {l(
+                          '比赛事实已整理，部分教练结论暂未完成',
+                          'Match evidence is ready; some coach conclusions are still incomplete',
+                        )}
+                      </strong>
+                      <p>
+                        {l(
+                          '进度会保留，继续处理即可，无需重新下载录像。',
+                          'Progress is kept. Continue without downloading the replay again.',
+                        )}
+                      </p>
+                    </div>
+                    <button disabled={busy || offline} onClick={() => analyze()}>
+                      {l('继续处理', 'Continue processing')}
+                    </button>
+                  </div>
+                )}
+                {reportReady && report && stage && (
+                  <div className="dc-report-layout">
+                    <aside className="dc-outline" aria-label={l('比赛阶段', 'Match phases')}>
+                      <span className="dc-kicker">{l('这一局的选择', 'DECISIONS THIS GAME')}</span>
+                      {report.stages.map((s, i) => (
+                        <button
+                          key={s.id}
+                          aria-current={stageIndex === i ? 'step' : undefined}
+                          onClick={() => {
+                            setStageIndex(i)
+                            setReplay(null)
+                          }}
+                        >
+                          <span className="dc-stage-number">{String(i + 1).padStart(2, '0')}</span>
+                          <span>
+                            <strong>{s.title}</strong>
+                            <small>
+                              {clock(s.from)} — {clock(s.to)}
+                            </small>
+                          </span>
+                          {s.status === 'ready' ? (
+                            <Icon name="check" size={15} />
+                          ) : (
+                            <span className="dc-stage-pending">
+                              {s.status === 'failed' ? '!' : '·'}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                      <button onClick={() => askAbout(stage.id, undefined, stage.title)}>
+                        <Icon name="mark" size={16} />
+                        <span>{l('和教练聊这阶段', 'Discuss this phase')}</span>
+                      </button>
+                      <p>
+                        {l(
+                          '阶段划分用于组织复盘，并非固定打法时钟。',
+                          'Phase boundaries organize the review; they are not prescribed timings.',
+                        )}
+                      </p>
+                      {report.goal && (
+                        <button
+                          className="dc-outline-goal"
+                          onClick={() => {
+                            const fold = document.getElementById(
+                              'dc-practice-fold',
+                            ) as HTMLDetailsElement | null
+                            if (fold) fold.open = true
+                            requestAnimationFrame(() =>
+                              document
+                                .getElementById('dc-report-goal')
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+                            )
+                          }}
+                        >
+                          <Icon name="focus" />
+                          <span>{l('下一局练什么', 'Your next practice')}</span>
+                          <Icon name="arrow" size={15} />
+                        </button>
+                      )}
+                    </aside>
+                    <div className="dc-stage-body" id="dc-current-stage" key={stage.id}>
+                      <div className="dc-review-stage-heading">
+                        <div>
+                          <span className="dc-kicker">
+                            {clock(stage.from)} — {clock(stage.to)}
+                          </span>
+                          <h2>{stage.title}</h2>
+                        </div>
+                        <span>
+                          {String(stageIndex + 1).padStart(2, '0')} /{' '}
+                          {String(report.stages.length).padStart(2, '0')}
+                        </span>
+                      </div>
+                      <div className="dc-stage-scan">
+                        {session.presentation?.status === 'pending' && (
+                          <span role="status">
+                            {l('正在编排交互内容…', 'Composing interactive review…')}
+                          </span>
+                        )}
+                        <span>
+                          {stage.decisions.length} {l('个关键片段', 'key moments')}
+                        </span>
+                        <span>
+                          {l(
+                            '先看处理，再按需展开',
+                            'Start with the option. Open details when needed.',
+                          )}
+                        </span>
+                      </div>
+                      {stage.summary && (
+                        <details className="dc-stage-overview">
+                          <summary>{l('阶段总览', 'Phase overview')}</summary>
+                          <p>{readable(stage.summary)}</p>
+                        </details>
+                      )}
+                      {stage.metrics.length > 0 && (
+                        <div className="dc-stage-metrics">
+                          {stage.metrics.map((v, i) => (
+                            <span key={i}>{v}</span>
+                          ))}
+                        </div>
+                      )}
+                      {stage.status === 'failed' && (
+                        <div className="dc-notice">
+                          <span>{errorMessage(stage.error, en)}</span>
+                          <button disabled={busy || preparing || offline} onClick={() => analyze()}>
+                            {l('重试未完成阶段', 'Retry incomplete phases')}
+                          </button>
+                        </div>
+                      )}
+                      <ReviewSurface
+                        session={session}
+                        surfaceId={stage.id}
+                        ui={
+                          stage.ui ||
+                          session.presentation?.surfaces?.find(
+                            (p) => p.updateComponents.surfaceId === stage.id,
+                          )
+                        }
+                        decisions={stage.decisions}
+                        evidence={report.evidence}
+                        en={en}
+                        readable={readable}
+                        inspect={setInspection}
+                        ask={(d) => askAbout(stage.id, d.id, `${stage.title} · ${clock(d.time)}`)}
+                      />
+                      <div className="dc-stage-next">
+                        {stageIndex > 0 && (
+                          <button
+                            onClick={() => {
+                              setStageIndex(stageIndex - 1)
+                              setReplay(null)
+                            }}
+                          >
+                            <Icon name="back" />
+                            {report.stages[stageIndex - 1]?.title}
+                          </button>
+                        )}
+                        {stageIndex < report.stages.length - 1 && (
+                          <button
+                            className="dc-primary"
+                            onClick={() => {
+                              setStageIndex(stageIndex + 1)
+                              setReplay(null)
+                            }}
+                          >
+                            {l('下一阶段', 'Next phase')} · {report.stages[stageIndex + 1]?.title}
+                            <Icon name="arrow" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {reportReady && session && (
+                  <Conversation
+                    key={`conversation:${session.id}`}
+                    session={session}
+                    en={en}
+                    busy={busy || offline || session.presentation?.status === 'pending'}
+                    inspect={setInspection}
+                    readable={readable}
+                    askMoment={(d) => {
+                      const s = report!.stages.find((s) => s.decisions.some((x) => x.id === d.id))!
+                      askAbout(s.id, d.id, `${s.title} · ${clock(d.time)}`)
+                    }}
+                    context={discussionContext}
+                    resetContext={() => setDiscussionContext({ label: l('整局', 'Whole match') })}
+                    request={(args) =>
+                      run(async () =>
+                        accept((await call(args)).session as unknown as ReviewSession),
+                      )
+                    }
+                  />
+                )}
+                {reportReady && report?.goal && (
+                  <details className="dc-practice-fold" id="dc-practice-fold">
+                    <summary>
+                      <Icon name="focus" />
+                      <span>
+                        {l('下一局只练一件事', 'One thing to practice next')}
+                        <strong>{report.goal!.title}</strong>
+                        {session.phase === 'complete' && (
+                          <small className="dc-practice-saved">
+                            {l('练习已保存', 'Practice saved')}
+                          </small>
+                        )}
+                      </span>
+                      <Icon name="arrow" />
+                    </summary>
+                    <GoalEditor
+                      key={`goal:${session.id}`}
+                      session={session}
+                      en={en}
+                      busy={
+                        busy ||
+                        !!preparing ||
+                        offline ||
+                        report.version < 4 ||
+                        session.discussion?.some((t) => t.status === 'pending') === true
+                      }
+                      save={(goal) =>
+                        void run(async () => {
+                          accept(
+                            (
+                              await call({
+                                action: 'save',
+                                id: session.id,
+                                title: goal.title,
+                                trigger: goal.trigger,
+                                action_rule: goal.action,
+                                check_method: goal.check,
+                              })
+                            ).session as unknown as ReviewSession,
+                          )
+                          await refresh(false)
+                        })
+                      }
+                    />
+                  </details>
+                )}
+              </>
+            )}
+            {session.warnings.length > 0 && (
+              <details className="dc-source-notes">
+                <summary>
+                  {l('数据状态与来源', 'Data status & sources')} · {session.warnings.length}
+                </summary>
+                {session.warnings.map((w, i) => (
+                  <p key={i}>{dual(w, en)}</p>
+                ))}
+              </details>
+            )}
+          </section>
         )}
       </main>
+      {inspection && session?.report && (
+        <ReviewInspector
+          key={`${session.id}:${inspection.mode}:${inspection.decisionId || inspection.evidenceId || 'match'}`}
+          session={session}
+          target={inspection}
+          en={en}
+          readable={readable}
+          invoke={call}
+          match={() =>
+            p.call('dota_match', { match_id: session.match_id, sections: ['overview', 'players'] })
+          }
+          close={() => setInspection(null)}
+          ask={askAbout}
+        />
+      )}
+      <footer className="dc-app-footer">
+        <span>DOTA / COACH</span>
+        <span>{l('看清选择，练习改变。', 'See the choice. Practice the change.')}</span>
+        <span>{l('比赛证据 + 你的偏好', 'Match evidence + your preferences')}</span>
+      </footer>
     </div>
   )
 }
-function Empty({ text }: { text: string }) {
-  return <div className="dota-empty">{text}</div>
-}
-function Economy({
-  data,
-  from,
-  to,
-  label,
+function Preferences({
+  en,
+  value,
+  update,
+  role,
+  setRole,
 }: {
-  data: RecordValue
-  from: number
-  to: number
-  label: string
+  en: boolean
+  value: ReviewPreferences
+  update: (v: ReviewPreferences) => void
+  role: number
+  setRole: (v: number) => void
 }) {
-  // OpenDota's helper exports bounded curve samples as {t,gold,xp}.
-  const samples = rows(data.points || data.samples || data.radiant_gold_adv)
-  const values = samples.map((p, i) => ({
-    t: Number(p.t ?? i * 60),
-    gold: Number(p.gold_adv ?? p.gold ?? p.value ?? 0),
-  }))
-  const max = Math.max(1, ...values.map((v) => Math.abs(v.gold))),
-    duration = Math.max(to, ...values.map((v) => v.t), 1)
+  const l = (zh: string, english: string) => (en ? english : zh)
   return (
-    <svg viewBox="0 0 600 180" role="img" aria-label={label}>
-      <rect
-        x={(from / duration) * 600}
-        y="0"
-        width={(Math.max(0, to - from) / duration) * 600}
-        height="180"
-        fill="currentColor"
-        opacity=".06"
-      />
-      <line x1="0" y1="90" x2="600" y2="90" stroke="currentColor" opacity=".25" />
-      <polyline
-        fill="none"
-        stroke="#43bdad"
-        strokeWidth="2"
-        points={values
-          .map((p) => `${(p.t / duration) * 600},${90 - (p.gold / max) * 75}`)
-          .join(' ')}
-      />
-      <text x="4" y="16" fill="currentColor" fontSize="12">
-        +{max}
-      </text>
-      <text x="4" y="172" fill="currentColor" fontSize="12">
-        −{max}
-      </text>
-    </svg>
+    <section className="dc-preferences" aria-label={l('复盘偏好', 'Review preferences')}>
+      <div>
+        <label>{l('更想研究什么', 'What would you like to focus on?')}</label>
+        <div className="dc-focus-chips">
+          {focusOptions.map(([k, zh, eng]) => (
+            <button
+              type="button"
+              key={k}
+              aria-pressed={value.focus.includes(k)}
+              onClick={() =>
+                update({
+                  ...value,
+                  focus: value.focus.includes(k)
+                    ? value.focus.filter((x) => x !== k)
+                    : [...value.focus, k],
+                })
+              }
+            >
+              {value.focus.includes(k) && <Icon name="check" size={14} />} {en ? eng : zh}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="dc-preference-fields">
+        <label>
+          {l('风险偏好', 'Play preference')}
+          <select
+            value={value.style}
+            onChange={(e) =>
+              update({ ...value, style: e.target.value as ReviewPreferences['style'] })
+            }
+          >
+            <option value="balanced">{l('均衡取舍', 'Balanced tradeoffs')}</option>
+            <option value="tempo">{l('主动带节奏', 'Proactive tempo')}</option>
+            <option value="safe">{l('稳健优先', 'Safety first')}</option>
+          </select>
+        </label>
+        <label>
+          {l('复盘深度', 'Detail')}
+          <select
+            value={value.detail}
+            onChange={(e) =>
+              update({ ...value, detail: e.target.value as ReviewPreferences['detail'] })
+            }
+          >
+            <option value="detailed">
+              {l('详细：每阶段最多 3 个片段', 'Detailed: up to 3 moments per phase')}
+            </option>
+            <option value="standard">
+              {l('精简：每阶段最多 2 个片段', 'Focused: up to 2 moments per phase')}
+            </option>
+          </select>
+        </label>
+        <label>
+          {l('本局位置', 'Your role')}
+          <select value={role} onChange={(e) => setRole(Number(e.target.value))}>
+            <option value="0">{l('从本局推断，之后可修改', 'Infer from match')}</option>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>
+                {n} {l('号位', 'position')}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label>
+        {l('补充你的目标或当时的想法（可选）', 'Your goal or intention (optional)')}
+        <textarea
+          value={value.intention}
+          maxLength={1500}
+          onChange={(e) => update({ ...value, intention: e.target.value })}
+          placeholder={l(
+            '例如：我想打主动一点，但总担心队友跟不上。',
+            'For example: I want to set the tempo but worry my team cannot follow.',
+          )}
+          rows={2}
+        />
+      </label>
+    </section>
   )
 }
-function BattleMap({
-  positions,
-  from,
-  to,
-  label,
+function GoalEditor({
+  session,
+  en,
+  busy,
+  save,
 }: {
-  positions: RecordValue[]
-  from: number
-  to: number
-  label: string
+  session: ReviewSession
+  en: boolean
+  busy: boolean
+  save: (goal: PracticeGoal) => void
 }) {
-  const sample = positions.filter((p) => Number(p.t) >= from && Number(p.t) <= to).slice(-200)
+  const l = (zh: string, english: string) => (en ? english : zh),
+    [goal, setGoal] = useState(() =>
+      readDraft<PracticeGoal>('goal:' + session.id, session.goal || session.report!.goal!),
+    ),
+    [editing, setEditing] = useState(false),
+    done = session.phase === 'complete'
+  const update = (k: keyof PracticeGoal, v: string) =>
+    setGoal((old) => {
+      const next = { ...old, [k]: v }
+      writeDraft('goal:' + session.id, next)
+      return next
+    })
   return (
-    <svg role="img" aria-label={label} viewBox="0 0 220 220" className="dota-map">
-      <rect width="220" height="220" rx="10" fill="#18352c" />
-      <path
-        d="M0 35 Q60 70 100 110 T220 190"
-        stroke="#407689"
-        strokeWidth="16"
-        fill="none"
-        opacity=".55"
-      />
-      <path
-        d="M18 202H202V18 M18 202V18H202 M18 202L202 18"
-        stroke="#b5b588"
-        strokeWidth="2"
-        opacity=".35"
-        fill="none"
-      />
-      {sample.map((p, i) => (
-        <circle
-          key={String(p.entity_id) + '-' + i}
-          cx={((Number(p.x) + 8500) / 17000) * 220}
-          cy={220 - ((Number(p.y) + 8500) / 17000) * 220}
-          r="3"
-          fill={p.team === 2 ? '#72e2ab' : '#ff8e82'}
-          opacity=".7"
-        >
-          <title>
-            {String(p.hero)} · {time(Number(p.t))}
-          </title>
-        </circle>
-      ))}
-    </svg>
+    <section className="dc-goal" id="dc-report-goal">
+      <div className="dc-goal-icon">
+        <Icon name={done ? 'check' : 'focus'} size={25} />
+      </div>
+      <div>
+        <span className="dc-kicker">
+          {done
+            ? l('已加入我的练习', 'SAVED TO MY PRACTICE')
+            : l('下一局，只练这一件事', 'ONE THING FOR THE NEXT GAME')}
+        </span>
+        <h2>{goal.title}</h2>
+        <p>
+          <b>{l('当', 'When')} </b>
+          {goal.trigger}
+          <br />
+          <b>{l('就', 'Then')} </b>
+          {goal.action}
+        </p>
+        <p className="dc-review-muted">{goal.check}</p>
+        {editing && !done && (
+          <div className="dc-goal-fields">
+            {(['title', 'trigger', 'action', 'check'] as const).map((k, i) => (
+              <label key={k}>
+                {
+                  [
+                    l('练习名称', 'Title'),
+                    l('触发条件', 'Trigger'),
+                    l('具体行动', 'Action'),
+                    l('检查方式', 'Check'),
+                  ][i]
+                }
+                <textarea
+                  value={goal[k]}
+                  maxLength={k === 'title' ? 100 : k === 'trigger' ? 500 : 700}
+                  onChange={(e) => update(k, e.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="dc-goal-actions">
+          {done ? (
+            <span className="dc-saved">
+              <Icon name="check" />
+              {l(
+                '已保存，下次回到「我的练习」记录实践',
+                'Saved. Log your practice in My practice.',
+              )}
+            </span>
+          ) : (
+            <>
+              <button
+                className="dc-primary"
+                disabled={
+                  busy ||
+                  !goal.title.trim() ||
+                  !goal.trigger.trim() ||
+                  !goal.action.trim() ||
+                  !goal.check.trim()
+                }
+                onClick={() => save(goal)}
+              >
+                {l('保存这一项练习', 'Save this practice goal')}
+                <Icon name="arrow" />
+              </button>
+              <button onClick={() => setEditing(!editing)}>
+                {editing ? l('收起编辑', 'Done editing') : l('调整这项练习', 'Edit goal')}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"github.com/klauspost/compress/zstd"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,5 +79,33 @@ func TestBz2FixtureAndCorruption(t *testing.T) {
 	os.WriteFile(bad, []byte("not a replay"), 0600)
 	if _, _, err = decode(bad, t.TempDir(), 1000); err == nil {
 		t.Fatal("unrecognized header accepted")
+	}
+}
+
+func TestNativeClockUsesServerTickAndFreezesDuringPause(t *testing.T) {
+	clock, ok := clockFromTicks(10536, 1.0/30, 242.30002, 0, false, 0)
+	if !ok || math.Abs(clock-108.89998) > 0.001 {
+		t.Fatal(clock, ok)
+	}
+	a, ok := clockFromTicks(11000, 1.0/30, 200, 60, true, 10900)
+	b, _ := clockFromTicks(11100, 1.0/30, 200, 60, true, 10900)
+	c, _ := clockFromTicks(11200, 1.0/30, 200, 360, false, 0)
+	if !ok || a != b || math.Abs(a-c) > 0.0001 {
+		t.Fatal(a, b, c)
+	}
+	if _, ok := clockFromTicks(0, 1.0/30, 0, 0, false, 0); ok {
+		t.Fatal("unknown clock became time zero")
+	}
+}
+func TestControlBitsAndUnknownFieldsStayDistinct(t *testing.T) {
+	if controlStates(nil) != nil || numeric(nil) != nil {
+		t.Fatal("missing state became zero")
+	}
+	states := controlStates(uint64((1 << 3) | (1 << 5))).(Row)
+	if states["silenced"] != true || states["stunned"] != true || states["muted"] != false {
+		t.Fatal(states)
+	}
+	if numeric(float64(math.Inf(1))) != nil {
+		t.Fatal("infinite number accepted")
 	}
 }
