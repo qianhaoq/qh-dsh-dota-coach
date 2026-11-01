@@ -48,6 +48,15 @@ export class CoachStore {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,kind UNINDEXED,body,tokenize='trigram');
       PRAGMA user_version=2; COMMIT;`)
+    this.transaction(() => {
+      if (!this.kbFtsReady() || this.db.prepare('SELECT 1 FROM search LIMIT 1').get()) return
+      const remove = this.db.prepare('DELETE FROM search WHERE id=?'),
+        insert = this.db.prepare('INSERT INTO search VALUES(?,?,?)')
+      for (const r of this.db.prepare('SELECT id,kind,data FROM records').all()) {
+        remove.run(String(r.id))
+        insert.run(String(r.id), String(r.kind), String(r.data))
+      }
+    })
   }
   close(): void {
     if (this.db.isOpen) this.db.close()
@@ -63,6 +72,9 @@ export class CoachStore {
         .prepare("SELECT 1 FROM sqlite_master WHERE name='search' AND sql LIKE '%fts5%'")
         .get(),
     )
+  }
+  private kbFtsPopulated(): boolean {
+    return this.kbFtsReady() && Boolean(this.db.prepare('SELECT 1 FROM search LIMIT 1').get())
   }
   kbStatus(): RecordValue {
     return {
@@ -92,6 +104,7 @@ export class CoachStore {
   private kbMarkdown(file: string): RecordValue[] {
     if (
       isAbsolute(file) ||
+      file.includes('\\') ||
       file.split('/').some((p) => !p || p === '.' || p === '..') ||
       !(['principles.md', 'library.md'].includes(file) || /^patch\/.+\.md$/i.test(file))
     )
@@ -100,7 +113,13 @@ export class CoachStore {
     if (!existsSync(path))
       throw new CoachError('not_found', 'Markdown file not found', { path: file })
     const actual = relative(realpathSync(this.home), realpathSync(path))
-    if (actual === '..' || actual.startsWith('../') || isAbsolute(actual))
+    if (
+      actual === '..' ||
+      actual.startsWith('../') ||
+      actual.startsWith('..\\') ||
+      isAbsolute(actual) ||
+      actual.split(/[\\/]/).includes('..')
+    )
       throw new CoachError('invalid_arguments', 'Knowledge path must remain under data home')
     const content = readFileSync(path, 'utf8')
     // Ignore headings inside fenced examples, and ignore root-file preambles.
@@ -120,7 +139,7 @@ export class CoachStore {
     if (lines.length) sections.push(lines.join('\n').trim())
     if (!sections.length && file.startsWith('patch/') && content.trim())
       sections.push(content.trim())
-    const slugs = new Map<string, number>()
+    const slugs = new Set<string>()
     return sections.map((body) => {
       const title = body.match(/^##\s+(.+)/)?.[1]?.trim() || file
       const slug =
@@ -128,9 +147,11 @@ export class CoachStore {
           .toLowerCase()
           .replace(/[^\p{L}\p{N}\s_-]/gu, '')
           .replace(/\s+/g, '-') || 'section'
-      const duplicate = slugs.get(slug) || 0
-      slugs.set(slug, duplicate + 1)
-      const path = `${file}#${slug}${duplicate ? `-${duplicate}` : ''}`
+      let fragment = slug,
+        suffix = 1
+      while (slugs.has(fragment)) fragment = `${slug}-${suffix++}`
+      slugs.add(fragment)
+      const path = `${file}#${fragment}`
       const field = (name: string) =>
         body.match(new RegExp(`^(?:[-*]\\s*)?${name}\\s*[:：]\\s*(.+)$`, 'im'))?.[1]?.trim()
       const stamp = body.match(stampPattern)
@@ -213,6 +234,9 @@ export class CoachStore {
       evidence_level: r.evidence_level ?? null,
       evidence_status: r.evidence_status || 'unverified_legacy',
       verification: r.verification || 'unverified_legacy',
+      superseded_by: r.superseded_by ?? null,
+      supersedes: r.supersedes ?? null,
+      recheck_reason: r.recheck_reason ?? null,
       needs_recheck: Boolean(
         applied.needs_recheck ||
           (!stamp && r.category !== 'principle') ||
@@ -241,24 +265,33 @@ export class CoachStore {
       .parse(args)
     const terms = input.query.toLowerCase().split(/\s+/)
     const markdown = this.kbMarkdownEntries()
-    // FTS is an acceleration only; short tokens and an absent index use a note scan.
-    const rows =
-      this.kbFtsReady() && terms.every((term) => [...term].length >= 3)
+    // FTS is an acceleration only; short tokens and missing candidates use a note scan.
+    let rows =
+      this.kbFtsPopulated() && terms.every((term) => [...term].length >= 3)
         ? this.db
             .prepare(
               "SELECT r.data FROM records r JOIN search s ON r.id=s.id WHERE r.kind='note' AND search MATCH ? ORDER BY bm25(search)",
             )
             .all(terms.map((t) => '"' + t.replaceAll('"', '""') + '"').join(' OR '))
-        : this.db
-            .prepare("SELECT data FROM records WHERE kind='note' ORDER BY updated_at DESC")
-            .all()
+        : []
+    if (!rows.length)
+      rows = this.db
+        .prepare("SELECT data FROM records WHERE kind='note' ORDER BY updated_at DESC")
+        .all()
+    const liveFiles = new Set(
+      ['principles.md', 'library.md'].filter((file) => existsSync(join(this.home, file))),
+    )
     const duplicates = new Set(
       markdown.map((r) => `${String(r.path).split('#')[0]}:${hash(String(r.body).trim())}`),
     )
     const notes = rows
       .map((r) => JSON.parse(String(r.data)) as RecordValue)
+      .filter((r) => !r.superseded_by)
       .filter(
-        (r) => !r.legacy_file || !duplicates.has(`${r.legacy_file}:${hash(String(r.body).trim())}`),
+        (r) =>
+          !r.legacy_file ||
+          (!liveFiles.has(String(r.legacy_file)) &&
+            !duplicates.has(`${r.legacy_file}:${hash(String(r.body).trim())}`)),
       )
     const hits = [...markdown, ...notes]
       .flatMap((r) => {
@@ -371,16 +404,18 @@ export class CoachStore {
   list(kind: string, args: RecordValue = {}): RecordValue[] {
     const limit = Math.max(1, Math.min(200, Number(args.limit) || 30))
     const q = String(args.query || '').trim()
-    const rows =
-      q.length >= 3
+    let rows =
+      q.length >= 3 && this.kbFtsPopulated()
         ? this.db
             .prepare(
               'SELECT r.data FROM records r JOIN search s ON r.id=s.id WHERE r.kind=? AND search MATCH ? ORDER BY r.updated_at DESC LIMIT ?',
             )
             .all(kind, '"' + q.replaceAll('"', '""') + '"', limit)
-        : this.db
-            .prepare('SELECT data FROM records WHERE kind=? ORDER BY updated_at DESC LIMIT 2000')
-            .all(kind)
+        : []
+    if (!rows.length)
+      rows = this.db
+        .prepare('SELECT data FROM records WHERE kind=? ORDER BY updated_at DESC LIMIT 2000')
+        .all(kind)
     return rows
       .map((r) => JSON.parse(String(r.data)) as RecordValue)
       .filter((r) => !q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()))

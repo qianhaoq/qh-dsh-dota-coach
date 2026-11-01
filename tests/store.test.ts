@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readdir, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { CoachStore } from '../packages/coach/src/store.ts'
+import { CoachError } from '../packages/coach/src/errors.ts'
 import type { RecordValue } from '../packages/coach/src/types.ts'
 async function setup(t: { after: (f: () => Promise<void>) => void }) {
   const home = await mkdtemp(join(tmpdir(), 'dota-store-'))
@@ -67,6 +69,65 @@ test('KB status reports local paths, note counts and FTS without inventing patch
     '## Fixture principle\nA Markdown fixture without an index.\n',
   )
   assert.equal((s.kbSearch({ query: 'Markdown' }).items as RecordValue[])[0]!.kind, 'principle')
+})
+test('KB backfills a recreated or empty FTS index when reopening existing records', async (t) => {
+  for (const sql of ['DROP TABLE search', 'DELETE FROM search'])
+    await t.test(sql, async (t) => {
+      const s = await setup(t),
+        source = record(s.source(material)),
+        saved = record(s.note(note(source)))
+      s.close()
+      const raw = new DatabaseSync(join(s.home, 'coach.sqlite'))
+      try {
+        raw.exec(sql)
+      } finally {
+        raw.close()
+      }
+      const reopened = new CoachStore(s.home)
+      try {
+        assert.equal(reopened.kbStatus().fts_ready, true)
+        assert.equal(reopened.db.prepare('SELECT COUNT(*) AS n FROM search').get()!.n, 2)
+        for (const row of [source, saved]) {
+          const indexed = reopened.db
+            .prepare('SELECT * FROM search WHERE id=?')
+            .get(String(row.id))!
+          assert.equal(indexed.kind, row.kind)
+          assert.deepEqual(JSON.parse(String(indexed.body)), row)
+        }
+        assert.deepEqual(
+          (reopened.kbSearch({ query: 'vision' }).items as RecordValue[]).map((r) => r.id),
+          [saved.id],
+        )
+        assert.deepEqual(
+          reopened.list('note', { query: 'vision' }).map((r) => r.id),
+          [saved.id],
+        )
+      } finally {
+        reopened.close()
+      }
+    })
+})
+test('KB and list scan notes when FTS is empty, missing or has no matching note candidates', async (t) => {
+  const s = await setup(t),
+    saved = record(s.note(note(record(s.source(material)))))
+  const findsNote = () => {
+    assert.deepEqual(
+      (s.kbSearch({ query: 'vision' }).items as RecordValue[]).map((r) => r.id),
+      [saved.id],
+    )
+    assert.deepEqual(
+      s.list('note', { query: 'vision' }).map((r) => r.id),
+      [saved.id],
+    )
+  }
+  s.db.exec('DELETE FROM search')
+  assert.equal(s.kbStatus().fts_ready, true)
+  findsNote()
+  s.source({ ...material, locator: 'paragraph 3' })
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM search').get()!.n, 1)
+  findsNote()
+  s.db.exec('DROP TABLE search')
+  findsNote()
 })
 test('KB ranks current Markdown principles, stamped library facts and linked notes with evidence metadata', async (t) => {
   const s = await setup(t)
@@ -143,6 +204,7 @@ test('KB gets bounded Markdown sections and patch files, reads edits immediately
     '# Fixtures\n\n## 地图意识\n小地图观察 fixture.\n\n## 地图意识\nSecond fixture.\n',
   )
   s.migrate()
+  const snapshot = s.list('note').find((r) => String(r.body).includes('小地图观察'))!
   const hits = s.kbSearch({ query: '小地' }).items as RecordValue[]
   assert.equal(hits.length, 1, 'the live Markdown section and its migrated copy are one hit')
   assert.equal(hits[0]!.kind, 'principle')
@@ -156,6 +218,10 @@ test('KB gets bounded Markdown sections and patch files, reads edits immediately
   assert.equal(record(s.kbGet({ id: hits[0]!.id!, offset: 7 })).body, String(full.body).slice(7))
   assert.notEqual((page.items as RecordValue[])[0]!.id, (page.items as RecordValue[])[1]!.id)
   await writeFile(join(s.home, 'principles.md'), '## Edited fixture\nUpdated knowledge fixture.\n')
+  assert.deepEqual(s.kbSearch({ query: '小地图观察' }).items, [])
+  assert.deepEqual(s.kbSearch({ query: '小地' }).items, [])
+  assert.equal(record(s.note({ action: 'get', id: snapshot.id! })).body, snapshot.body)
+  assert.equal(record(s.kbGet({ id: snapshot.id! })).body, snapshot.body)
   assert.equal(
     (s.kbSearch({ query: 'Updated' }).items as RecordValue[])[0]!.title,
     'Edited fixture',
@@ -176,6 +242,35 @@ test('KB gets bounded Markdown sections and patch files, reads edits immediately
       .length,
     1,
   )
+})
+test('KB allocates unique Markdown fragments even when headings include allocated suffixes', async (t) => {
+  const s = await setup(t)
+  const sections = [
+    { title: 'Vision', body: 'First section.', fragment: 'vision' },
+    { title: 'Vision', body: 'Second section.', fragment: 'vision-1' },
+    { title: 'Vision-1', body: 'Third section.', fragment: 'vision-1-1' },
+  ]
+  await writeFile(
+    join(s.home, 'principles.md'),
+    sections.map((r) => `## ${r.title}\n${r.body}\n`).join('\n'),
+  )
+  const items = s.kbGet({ path: 'principles.md' }).items as RecordValue[]
+  assert.equal(items.length, 3)
+  assert.equal(new Set(items.map((r) => r.path)).size, 3)
+  assert.equal(new Set(items.map((r) => r.id)).size, 3)
+  for (const [i, section] of sections.entries()) {
+    const path = `principles.md#${section.fragment}`,
+      id = `md:${path}`
+    assert.equal(items[i]!.path, path)
+    assert.equal(items[i]!.id, id)
+    for (const args of [{ id }, { path }]) {
+      const fetched = record(s.kbGet(args))
+      assert.equal(fetched.id, id)
+      assert.equal(fetched.path, path)
+      assert.equal(fetched.title, section.title)
+      assert.equal(fetched.body, `## ${section.title}\n${section.body}`)
+    }
+  }
 })
 test('KB filters before limiting FTS hits and supports short queries without dropping matching notes', async (t) => {
   const s = await setup(t),
@@ -204,9 +299,17 @@ test('KB validates actions inputs and restricts path reads to knowledge Markdown
     '/etc/passwd',
     'coach.sqlite',
     'patch/../library.md',
+    'patch/./fixture.md',
+    'patch//fixture.md',
     'patch/local.dem',
   ])
     assert.throws(() => s.kbGet({ path }), /Use principles/)
+  for (const path of ['patch/..\\..\\private.md', 'patch\\fixture.md', 'patch/nested\\fixture.md'])
+    for (const args of [{ path }, { id: `md:${path}` }])
+      assert.throws(
+        () => s.kbGet(args),
+        (error: unknown) => error instanceof CoachError && error.code === 'invalid_arguments',
+      )
   await symlink(join(process.cwd(), 'package.json'), join(s.home, 'patch/escape.md'))
   assert.throws(() => s.kbGet({ path: 'patch/escape.md' }), /under data home/)
   assert.throws(() => s.kbGet({ path: 'patch/missing.md' }), /not found/)
@@ -244,6 +347,27 @@ test('notes reject titles-only and comment evidence, then expose patch applicabi
   assert.equal(revised.supersedes, first.id)
   assert.equal(s.get(String(first.id)).superseded_by, revised.id)
   assert.equal(s.list('note', { query: 'vision' }).length, 2)
+  const hits = s.kbSearch({ query: 'vision' }).items as RecordValue[]
+  assert.deepEqual(
+    hits.map((r) => r.id),
+    [revised.id],
+  )
+  assert.equal(hits[0]!.supersedes, first.id)
+  assert.equal(hits[0]!.superseded_by, null)
+  const previous = record(s.kbGet({ id: first.id! })),
+    current = record(s.kbGet({ id: revised.id! }))
+  assert.equal(previous.superseded_by, revised.id)
+  assert.equal(previous.supersedes, null)
+  assert.equal(previous.needs_recheck, true)
+  assert.equal(current.supersedes, first.id)
+  assert.equal(current.superseded_by, null)
+  s.note({ action: 'recheck', id: revised.id!, body: 'New contradictory material' })
+  assert.equal(record(s.kbGet({ id: revised.id! })).recheck_reason, 'New contradictory material')
+  s.db.exec('DROP TABLE search')
+  assert.deepEqual(
+    (s.kbSearch({ query: 'vision' }).items as RecordValue[]).map((r) => r.id),
+    [revised.id],
+  )
 })
 test('review and one training goal commit together, with readable evidence references and user reports', async (t) => {
   const s = await setup(t)
