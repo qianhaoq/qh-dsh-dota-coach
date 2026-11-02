@@ -1,0 +1,85 @@
+# CI-only Auto Merge caller for this local DSH Dota coach plugin.
+#
+# Squash-merges an open PR once the existing "Verify and package" checks
+# are green. This repo does not run Codex Gate, QA Gate, Secret Scan,
+# Diff Quiz, or a Copilot requirement.
+#
+# Check name produced by this caller (job id `auto-merge`):
+#   - "auto-merge / Auto Merge"
+# (That check is intentionally NOT in required_checks — a run cannot
+# gate itself. Branch protection already requires the five CI checks
+# below; no reviews are required.)
+#
+# workflow_run fires when "Verify and package" completes. Note:
+#   - workflow_run only triggers from the default branch, once this file
+#     is merged there.
+#   - The workflow name must match `name:` in ci.yml ("Verify and package").
+#   - Runs that workflow starts from `push` are skipped by the reusable
+#     workflow; runs from `pull_request` are matched to a PR by head SHA;
+#     every other origin (review / dispatch) triggers a sweep of ALL open
+#     non-draft PRs targeting the default branch (cap 30).
+#   - CANCELLED completions (non-push) also enter evaluation: a cancelled
+#     LATEST required check is healed (re-run, attempt cap 3) and merging
+#     is skipped for that round — never a pass, never final red.
+#   - Label `no-auto-merge` blocks a PR inside the reusable workflow.
+#
+# Concurrency is the caller's job (a reusable workflow cannot own the
+# caller's event stream). Use exactly the group below with
+# cancel-in-progress: false — events QUEUE behind an in-flight
+# evaluation of the same PR (or behind another sweep) instead of
+# cancelling it, so a merge in progress is never interrupted.
+# Per-PR where the PR is known: pull_request_review /
+# workflow_dispatch(pr_number) / workflow_run whose triggering event was
+# `pull_request` (head SHA identifies the PR). Everything else shares
+# the `auto-merge-sweep` group.
+
+name: Auto Merge
+
+on:
+  workflow_run:
+    workflows: ["Verify and package"]
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to re-evaluate (e.g. after resolving review threads)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  # Write is used ONLY by the reusable workflow's required-check heal
+  # (re-running a cancelled check's workflow run); nothing else widens.
+  actions: write
+
+concurrency:
+  group: ${{ (github.event_name == 'workflow_dispatch' && format('auto-merge-pr-{0}', github.event.inputs.pr_number)) || (github.event_name == 'pull_request_review' && format('auto-merge-pr-{0}', github.event.pull_request.number)) || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' && format('auto-merge-pr-{0}', github.event.workflow_run.head_sha)) || 'auto-merge-sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    # Caller-level filter (saves Actions minutes): a submitted review can
+    # only enable a merge when it is an approval (or Copilot's review).
+    # A workflow_run whose jobs were all skipped has conclusion 'skipped'
+    # and changed nothing — don't start a sweep.
+    if: >-
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'skipped') &&
+      (github.event_name != 'pull_request_review' ||
+        github.event.review.state == 'approved' ||
+        github.event.review.user.login == 'copilot-pull-request-reviewer[bot]')
+    uses: qianhaoq/devflow-gates/.github/workflows/auto-merge.yml@5f984ac2f3f879fe2f69d803c672e22f4d9ac1fc # devflow-gates main @ 5f984ac
+    with:
+      # Exact check-run names from ci.yml (matrix target / browser job).
+      # Do not prefix them; this CI is not a reusable "ci / …" caller.
+      required_checks: |
+        linux-x64
+        windows-x64
+        darwin-arm64
+        darwin-x64
+        browser
+      merge_method: squash
+      require_copilot: false
