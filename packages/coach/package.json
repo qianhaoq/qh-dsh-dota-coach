@@ -1,6 +1,6 @@
 {
   "name": "@qianhaoq/dsh-dota-coach",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "type": "module",
   "description": "AI-native guided Dota 2 replay coaching for DSH",
   "license": "MIT",

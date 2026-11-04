@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
-import { stat, mkdir, writeFile } from 'node:fs/promises'
+import { stat, mkdir, writeFile, rename } from 'node:fs/promises'
 import { CoachStore } from './store.ts'
 import { OpenDota } from './http.ts'
 import { KnowledgeMemory } from './memory.ts'
@@ -12,6 +12,7 @@ import { Tasks } from './tasks.ts'
 import { Replays, extractor } from './replay.ts'
 import { CoachError, failure, required } from './errors.ts'
 import { dispatchSourceTool } from './host-tools.ts'
+import { buildSiteSnapshot } from './site-export.ts'
 import type { CoachConfig } from './config.ts'
 import type { RecordValue, ToolName, Json } from './types.ts'
 import * as S from './legacy/shape.mjs'
@@ -233,6 +234,7 @@ export class CoachService {
           ),
         },
         video_tools: this.providers(),
+        search_tools: ['bili_search', 'yt_search'].filter(name => !!this.ctx.tools.get(name)),
         tasks: json(this.tasks.list()) as Json,
         source_import_available: true,
         memory: {
@@ -243,13 +245,22 @@ export class CoachService {
     }
     if (name === 'dota_memory') return this.memoryTool(a, signal, exec)
     if (name === 'dota_kb') {
+      if (a.action === 'export') {
+        const snapshot = buildSiteSnapshot(this.store, a.ids)
+        const dir = join(this.home, 'export', 'site')
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        const path = join(dir, 'knowledge.v1.json'), temporary = `${path}.${randomUUID()}.tmp`
+        await writeFile(temporary, JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 })
+        await rename(temporary, path)
+        return { ok: true, export_path: path, snapshot }
+      }
       if (a.action === 'search') return this.store.kbSearch(a)
       if (a.action === 'get') return this.store.kbGet(a)
       if (a.action === 'status') return this.store.kbStatus()
-      throw new CoachError('invalid_arguments', 'Use search/get/status for dota_kb')
+      throw new CoachError('invalid_arguments', 'Use search/get/status/export for dota_kb')
     }
     if (name === 'dota_source')
-      return a.action === 'fetch' ? this.fetchSource(a, signal, exec) : this.store.source(a)
+      return a.action === 'search' ? this.searchSources(a, signal, exec) : a.action === 'fetch' ? this.fetchSource(a, signal, exec) : this.store.source(a)
     if (name === 'dota_coach_note') {
       const out = this.store.note(a)
       if ((a.action || 'append') === 'append') out.export_path = this.store.exportMarkdown()
@@ -658,6 +669,20 @@ export class CoachService {
         result: await this.memory.request('feedback', a, exec, signal),
       }
     throw new CoachError('invalid_arguments', 'Unknown memory action')
+  }
+  private async searchSources(a: RecordValue, signal: AbortSignal, exec?: ToolRunContext): Promise<RecordValue> {
+    const provider = required(a.provider_tool, 'provider_tool')
+    if (!['bili_search', 'yt_search'].includes(provider) || !this.ctx.tools.get(provider))
+      throw new CoachError('source_provider_unavailable', 'Install the matching bili_search or yt_search provider; search results are discovery only')
+    if (!exec) throw new CoachError('source_requires_session', 'Search from a DSH conversation')
+    const outcome = await dispatchSourceTool(this.ctx, {
+      callId: `${exec.callId}:search:${randomUUID()}` as typeof exec.callId,
+      rootCallId: exec.rootCallId, parent: exec.token, name: provider,
+      arguments: a.provider_args || { query: required(a.query, 'query') }, signal, agent: exec.agent,
+    }, exec)
+    if (outcome.isError) throw new CoachError('source_search_failed', 'Search provider failed')
+    for (const context of outcome.additionalContexts || []) exec.deferContext(context)
+    return json({ ok: true, evidence_level: 'discovery_only', provider_tool: provider, content: outcome.content })
   }
   private providers(): string[] {
     return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json'].filter(

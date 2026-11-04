@@ -169,9 +169,9 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
     },
     dota_source: {
       description:
-        'Fetch through an installed source tool, or import readable text with a locator. Import is available without video plugins.',
+        'Search installed bili_search/yt_search providers (discovery only), fetch through a subtitle/article tool, or import readable text with a locator. Search does not save knowledge. Preserve source URLs and timestamp locators.',
       parameters: {
-        action: { ...enumeration('fetch', 'import', 'list', 'get'), required: true },
+        action: { ...enumeration('search', 'fetch', 'import', 'list', 'get'), required: true },
         id: string,
         source_id: string,
         title: string,
@@ -180,7 +180,7 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
         material_type: enumeration('transcript', 'article', 'user_notes', 'comment'),
         origin: enumeration('user_import', 'bilibili', 'youtube', 'forum', 'match'),
         tags: strings,
-        provider_tool: enumeration('bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json'),
+        provider_tool: enumeration('bili_search', 'yt_search', 'bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json'),
         offset: number,
         max_chars: number,
         provider_args: { type: 'object', additionalProperties: true },
@@ -191,7 +191,8 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
       description:
         'Read local knowledge from Markdown and SQLite notes without MemOS or network access. Search ranks stable principles before stamped patch facts; a stamp is not independent verification. Get a note/section by id, or a relative Markdown path (optionally #section). Cite stamp, evidence refs and applicability before coaching. Write with dota_coach_note.',
       parameters: {
-        action: { ...enumeration('search', 'get', 'status'), required: true },
+        action: { ...enumeration('search', 'get', 'status', 'export'), required: true },
+        ids: { ...strings, description: 'Explicit note IDs selected for a public site snapshot. Required for export; never exports all notes.' },
         query: string,
         hero: string,
         patch: string,
