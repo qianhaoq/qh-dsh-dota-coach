@@ -395,7 +395,7 @@ const KEY_PURCHASES = new Set([
   'lotus_orb',
   'glimmer_cape',
   'silver_edge',
-  'shadow_blade',
+  'invis_sword',
   'bloodthorn',
   'orchid',
   'nullifier',
@@ -447,23 +447,26 @@ export function matchDerived(match, heroes, itemsByKey, { accountId } = {}) {
       if (hasPlayers) {
         const radiant = total(key, true, i),
           dire = total(key, false, i)
-        if (radiant === null || dire === null) {
+        if (radiant !== null && dire !== null) {
+          points.push({
+            ...base,
+            radiant,
+            dire,
+            diff: radiant - dire,
+            ...(focus
+              ? {
+                  focus: finite(focus[key]?.[i]) ? focus[key][i] : null,
+                  focus_team_diff: (radiant - dire) * sign,
+                }
+              : {}),
+          })
+        } else {
           missing.add(`players.${key}[${i}]`)
-          continue
+          if (finite(match[advKey]?.[i])) {
+            points.push({ ...base, [valueKey]: match[advKey][i] })
+          }
         }
-        points.push({
-          ...base,
-          radiant,
-          dire,
-          diff: radiant - dire,
-          ...(focus
-            ? {
-                focus: finite(focus[key]?.[i]) ? focus[key][i] : null,
-                focus_team_diff: (radiant - dire) * sign,
-              }
-            : {}),
-        })
-      } else if (finite(match[advKey][i])) {
+      } else if (finite(match[advKey]?.[i])) {
         points.push({ ...base, [valueKey]: match[advKey][i] })
       }
     }
