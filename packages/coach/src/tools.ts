@@ -114,7 +114,8 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
       },
     },
     dota_match: {
-      description: 'Read one match with source, capture time, missing fields and evidence ID.',
+      description:
+        'Read one match with source, capture time and evidence ID. Always includes derived gold/XP summaries, final kills, worst five-minute gold window, deaths/objectives in that window, key purchases and killed-by facts; no item advice. Optional sections remain supported. missing is retained for compatibility; prefer missing_fields.',
       parameters: {
         match_id,
         sections: {

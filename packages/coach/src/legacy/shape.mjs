@@ -375,6 +375,230 @@ export function matchWards(match, heroes) {
   return rows
 }
 
+// ---------------------------------------------------------------- M0 派生事实
+
+const KEY_PURCHASES = new Set([
+  'blink',
+  'overwhelming_blink',
+  'swift_blink',
+  'arcane_blink',
+  'black_king_bar',
+  'ultimate_scepter',
+  'ultimate_scepter_2',
+  'aghanims_shard',
+  'travel_boots',
+  'travel_boots_2',
+  'force_staff',
+  'hurricane_pike',
+  'sheepstick',
+  'aeon_disk',
+  'lotus_orb',
+  'glimmer_cape',
+  'silver_edge',
+  'invis_sword',
+  'bloodthorn',
+  'orchid',
+  'nullifier',
+  'sphere',
+  'abyssal_blade',
+  'butterfly',
+  'satanic',
+  'heart',
+  'assault',
+  'manta',
+  'sange_and_yasha',
+  'ethereal_blade',
+  'radiance',
+])
+
+/** Minute-indexed OpenDota facts only; missing samples never become zero. */
+export function matchDerived(match, heroes, itemsByKey, { accountId } = {}) {
+  const players = match.players || []
+  const focus = accountId == null ? null : players.find((p) => p.account_id === accountId)
+  const team = focus && !isRadiantOf(focus) ? 'dire' : 'radiant'
+  const sign = team === 'radiant' ? 1 : -1
+  const missing = new Set()
+  const hasArray = (v) => Array.isArray(v) && v.length > 0
+  const finite = (v) => typeof v === 'number' && Number.isFinite(v)
+  for (const key of ['teamfights', 'objectives', 'radiant_gold_adv', 'radiant_xp_adv']) {
+    if (!hasArray(match[key])) missing.add(key)
+  }
+  for (const key of ['deaths_log', 'purchase_log']) {
+    if (!players.some((p) => (key === 'purchase_log' ? hasArray(p[key]) : Array.isArray(p[key]))))
+      missing.add(key)
+  }
+  const total = (key, radiant, i) => {
+    const side = players.filter((p) => isRadiantOf(p) === radiant)
+    return side.length && side.every((p) => finite(p[key]?.[i]))
+      ? side.reduce((sum, p) => sum + p[key][i], 0)
+      : null
+  }
+  const summary = (key, advKey, valueKey) => {
+    const hasPlayers = players.some((p) => hasArray(p[key]))
+    if (!hasPlayers) missing.add(`players.${key}`)
+    if (!hasPlayers && !hasArray(match[advKey])) {
+      missing.add(key)
+      return null
+    }
+    const points = []
+    for (const i of [10, 20, 30]) {
+      if (finite(match.duration) && i * 60 > match.duration) continue
+      const base = { t: i * 60, label: `@${i}` }
+      if (hasPlayers) {
+        const radiant = total(key, true, i),
+          dire = total(key, false, i)
+        if (radiant !== null && dire !== null) {
+          points.push({
+            ...base,
+            radiant,
+            dire,
+            diff: radiant - dire,
+            ...(focus
+              ? {
+                  focus: finite(focus[key]?.[i]) ? focus[key][i] : null,
+                  focus_team_diff: (radiant - dire) * sign,
+                }
+              : {}),
+          })
+        } else {
+          missing.add(`players.${key}[${i}]`)
+          if (finite(match[advKey]?.[i])) {
+            points.push({ ...base, [valueKey]: match[advKey][i] })
+          }
+        }
+      } else if (finite(match[advKey]?.[i])) {
+        points.push({ ...base, [valueKey]: match[advKey][i] })
+      }
+    }
+    return { source: hasPlayers ? `players.${key}` : advKey, points }
+  }
+  const gold_t_summary = summary('gold_t', 'radiant_gold_adv', 'gold_adv')
+  const xp_t_summary = summary('xp_t', 'radiant_xp_adv', 'xp_adv')
+  let kills_diff = null
+  if (players.length && players.every((p) => finite(p.kills))) {
+    const radiant = players.filter(isRadiantOf).reduce((s, p) => s + p.kills, 0)
+    const dire = players.filter((p) => !isRadiantOf(p)).reduce((s, p) => s + p.kills, 0)
+    kills_diff = {
+      radiant_kills: radiant,
+      dire_kills: dire,
+      diff: radiant - dire,
+      ...(focus
+        ? {
+            focus_team_kills: sign === 1 ? radiant : dire,
+            enemy_kills: sign === 1 ? dire : radiant,
+            focus_diff: (radiant - dire) * sign,
+          }
+        : {}),
+    }
+  } else missing.add('players.kills')
+  const source = hasArray(match.radiant_gold_adv) ? 'radiant_gold_adv' : 'players.gold_t'
+  const curve =
+    source === 'radiant_gold_adv'
+      ? match.radiant_gold_adv
+      : Array.from(
+          { length: Math.max(0, ...players.map((p) => p.gold_t?.length || 0)) },
+          (_, i) => {
+            const r = total('gold_t', true, i),
+              d = total('gold_t', false, i)
+            return r === null || d === null ? null : r - d
+          },
+        )
+  let worst_gold_window = null
+  for (let end = 5; end < curve.length; end++) {
+    if (finite(match.duration) && end * 60 > match.duration) continue
+    if (!Array.from({ length: 6 }, (_, j) => curve[end - 5 + j]).every(finite)) continue
+    const delta = (curve[end] - curve[end - 5]) * sign
+    if (!worst_gold_window || delta < worst_gold_window.gold_delta_for_team) {
+      worst_gold_window = {
+        start_s: (end - 5) * 60,
+        end_s: end * 60,
+        start: fmtTime((end - 5) * 60),
+        end: fmtTime(end * 60),
+        gold_delta_for_team: delta,
+        team,
+        source,
+      }
+    }
+  }
+  if (!worst_gold_window) {
+    for (const key of ['worst_gold_window', 'deaths_in_window', 'objectives_in_window'])
+      missing.add(key)
+  }
+  const inWindow = (t) =>
+    finite(t) && worst_gold_window && t >= worst_gold_window.start_s && t <= worst_gold_window.end_s
+  const deaths_in_window = [],
+    purchases_key_items = [],
+    killed_by = []
+  for (const p of players) {
+    const hero = heroName(heroes, p.hero_id),
+      side = isRadiantOf(p) ? 'radiant' : 'dire'
+    const deaths = (p.deaths_log || []).filter((d) => finite(d.time))
+    for (const d of deaths.filter((d) => inWindow(d.time))) {
+      deaths_in_window.push({
+        t: d.time,
+        time: fmtTime(d.time),
+        hero,
+        team: side,
+        killer: d.key ? heroName(heroes, d.key) : null,
+      })
+    }
+    const firstDeath = deaths.length ? Math.min(...deaths.map((d) => d.time)) : null
+    for (const entry of p.purchase_log || []) {
+      if (!KEY_PURCHASES.has(entry.key) || !finite(entry.time)) continue
+      purchases_key_items.push({
+        hero,
+        team: side,
+        account_id: p.account_id ?? null,
+        ...(accountId != null ? { is_self: p.account_id === accountId } : {}),
+        item_key: entry.key,
+        item: itemsByKey?.get(entry.key)?.dname || entry.key,
+        t: entry.time,
+        time: fmtTime(entry.time),
+        vs_worst_window: !worst_gold_window
+          ? 'unknown'
+          : entry.time < worst_gold_window.start_s
+            ? 'before'
+            : entry.time > worst_gold_window.end_s
+              ? 'after'
+              : 'during',
+        vs_own_deaths:
+          !Array.isArray(p.deaths_log) || deaths.length !== p.deaths_log.length
+            ? 'unknown'
+            : firstDeath === null
+              ? 'no_deaths'
+              : entry.time < firstDeath
+                ? 'before_first_death'
+                : 'after_a_death',
+      })
+    }
+    if (p.killed_by && typeof p.killed_by === 'object' && !Array.isArray(p.killed_by)) {
+      for (const [npc, count] of Object.entries(p.killed_by)) {
+        if (finite(count))
+          killed_by.push({
+            hero,
+            team: side,
+            killer_npc: npc,
+            killer: heroName(heroes, npc),
+            count,
+          })
+      }
+    }
+  }
+  deaths_in_window.sort((a, b) => a.t - b.t)
+  purchases_key_items.sort((a, b) => a.t - b.t)
+  return {
+    gold_t_summary,
+    xp_t_summary,
+    kills_diff,
+    worst_gold_window,
+    deaths_in_window,
+    objectives_in_window: matchObjectives(match).filter((o) => inWindow(o.t)),
+    purchases_key_items,
+    killed_by,
+    missing_fields: [...missing],
+  }
+}
+
 // ---------------------------------------------------------------- 英雄
 
 export function heroBrief({ hero, stat, matchups, itemPop, heroes }) {

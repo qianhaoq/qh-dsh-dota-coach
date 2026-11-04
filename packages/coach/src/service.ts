@@ -393,12 +393,21 @@ export class CoachService {
     if (name === 'dota_match') {
       const sections =
         Array.isArray(a.sections) && a.sections.length ? a.sections : ['overview', 'players']
-      const out: Upstream = { ...base, sections, trace_ready: !!trace }
+      const derived = S.matchDerived(match, heroes, items.byKey, {
+        accountId: Number(a.account) || Number(this.store.setting('accountId')) || this.cfg.accountId,
+      })
+      const out: Upstream = {
+        ...base,
+        ...derived,
+        sections,
+        trace_ready: !!trace,
+        missing: derived.missing_fields,
+      }
       for (const section of sections) {
         if (section === 'overview') out.overview = S.matchOverview(match, heroes)
         if (section === 'players')
           out.players = S.matchPlayers(match, heroes, items.byId, {
-            accountId: Number(a.account) || this.cfg.accountId,
+            accountId: Number(a.account) || Number(this.store.setting('accountId')) || this.cfg.accountId,
           })
         if (section === 'draft') out.draft = S.matchDraft(match, heroes)
         if (section === 'items') out.items = S.matchItemTimings(match, heroes, items.byKey)

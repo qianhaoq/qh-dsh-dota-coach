@@ -43,3 +43,36 @@ test('cached hero datasets retain individual original collection timestamps', as
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('dota_match attaches derived facts regardless of sections and retains missing', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'dota-match-derived-'))
+  const service = new CoachService(new Context(), Config({ memoryEnabled: false }), home, '.')
+  try {
+    await mkdir(join(home, 'cache'), { recursive: true })
+    const at = Date.now()
+    for (const [path, file] of [
+      ['/constants/heroes', 'heroes.trim.json'],
+      ['/constants/items', 'items.trim.json'],
+      ['/matches/123456', 'match.json'],
+    ]) {
+      await writeFile(
+        join(home, 'cache', createHash('sha256').update(path).digest('hex') + '.json'),
+        JSON.stringify({
+          at,
+          body: JSON.parse(await readFile('packages/coach/fixtures/' + file, 'utf8')),
+        }),
+      )
+    }
+    const value = await service.invoke('dota_match', { match_id: '123456', sections: ['draft'] })
+    assert.equal(value.ok, true, JSON.stringify(value))
+    assert.ok(Object.hasOwn(value, 'gold_t_summary'))
+    assert.ok(Object.hasOwn(value, 'worst_gold_window'))
+    assert.ok(Array.isArray(value.purchases_key_items))
+    assert.deepEqual(value.missing, value.missing_fields)
+    assert.equal(value.captured_at, new Date(at).toISOString())
+    assert.ok(value.evidence_id)
+  } finally {
+    await service.dispose()
+    await rm(home, { recursive: true, force: true })
+  }
+})
