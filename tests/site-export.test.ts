@@ -10,10 +10,10 @@ import { Config } from '../packages/coach/src/config.ts'
 import { buildSiteSnapshot } from '../packages/coach/src/site-export.ts'
 import type { RecordValue } from '../packages/coach/src/types.ts'
 
-function material(store: CoachStore, suffix = '', publicSource = true) {
+function material(store: CoachStore, suffix = '', publicSource = true, sourceArgs: RecordValue = {}) {
   const source = store.source({ action:'import', source_id:'BV1xx411c7mD', title:'Public fixture',
     body:'A synthetic public transcript about checking objectives before moving.', locator:'12:30–12:45',
-    material_type:publicSource?'transcript':'user_notes', origin:publicSource?'bilibili':'user_import', patch:'7.41f' }).record as RecordValue
+    material_type:publicSource?'transcript':'user_notes', origin:publicSource?'bilibili':'user_import', patch:'7.41f', ...sourceArgs }).record as RecordValue
   return store.note({ kind:'principle', title:'Check the next objective'+suffix, body:'Look at the next objective before deciding to cross the river.'+suffix,
     stamp:'[long-term · 2026-11-05 · BV1xx411c7mD]', source_id:source.source_id!, source_record_id:source.id!, hero:'', patch:'unknown' }).record as RecordValue
 }
@@ -61,4 +61,33 @@ test('export tool writes the versioned snapshot atomically and rejects implicit 
   assert.deepEqual(JSON.parse(text),result.snapshot)
   assert.equal((await service.invoke('dota_kb',{action:'export'})).ok,false)
   assert.equal(await readFile(join(home,'export/site/knowledge.v1.json'),'utf8'),text)
+})
+
+test('video URL locators retain timestamp and multipart selectors without tracking data', async t => {
+  const home = await mkdtemp(join(tmpdir(),'coach-site-locators-'))
+  const store = new CoachStore(home)
+  t.after(async()=>{store.close();await rm(home,{recursive:true,force:true})})
+  for (const [source_id, origin, locator, expected] of [
+    ['dQw4w9WgXcQ','youtube','https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=750s&si=tracking','https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=750s'],
+    ['BV1xx411c7mD','bilibili','https://www.bilibili.com/video/BV1xx411c7mD?p=2&t=750&session=private','https://www.bilibili.com/video/BV1xx411c7mD?t=750&p=2'],
+  ]) {
+    const note = material(store,origin,true,{source_id:source_id!,origin:origin!,locator:locator!})
+    const entry = (buildSiteSnapshot(store,[note.id]).entries as RecordValue[])[0]!
+    assert.equal(entry.source_url,expected)
+    assert.equal(entry.locator,expected)
+  }
+})
+
+test('private/account routes and mismatched video locators are not public provenance', async t => {
+  const home = await mkdtemp(join(tmpdir(),'coach-site-private-routes-'))
+  const store = new CoachStore(home)
+  t.after(async()=>{store.close();await rm(home,{recursive:true,force:true})})
+  for (const locator of ['https://www.reddit.com/message/messages/abc123','https://www.youtube.com/feed/history','https://www.bilibili.com/account','https://www.dota2.com/account']) {
+    const note = material(store,locator,true,{source_id:locator,origin:'forum',material_type:'article',locator})
+    assert.throws(()=>buildSiteSnapshot(store,[note.id]),/public resource/)
+  }
+  const wrong = material(store,'wrong video',true,{origin:'youtube',source_id:'dQw4w9WgXcQ',locator:'https://youtu.be/abcdefghijk?t=10'})
+  assert.throws(()=>buildSiteSnapshot(store,[wrong.id]),/same supported public resource/)
+  const post = material(store,'public post',true,{source_id:'public-post',origin:'forum',material_type:'article',locator:'https://www.reddit.com/r/DotA2/comments/abc123/public_post/?token=private'})
+  assert.equal((buildSiteSnapshot(store,[post.id]).entries as RecordValue[])[0]!.source_url,'https://www.reddit.com/r/DotA2/comments/abc123/public_post/')
 })

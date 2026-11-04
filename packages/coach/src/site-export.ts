@@ -7,11 +7,29 @@ import type { RecordValue } from './types.ts'
 const selection = z.array(z.string().trim().min(1)).min(1).max(100)
 const publicHosts = new Set(['bilibili.com', 'www.bilibili.com', 'youtube.com', 'www.youtube.com', 'youtu.be', 'reddit.com', 'www.reddit.com', 'old.reddit.com', 'dota2.com', 'www.dota2.com'])
 
+function publicResource(url: URL): string | null {
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || !publicHosts.has(url.hostname)) return null
+  if (url.hostname.endsWith('bilibili.com')) return /^\/video\/(BV[A-Za-z0-9]{10})\/?$/.exec(url.pathname)?.[1] ?? null
+  if (url.hostname === 'youtu.be') return /^\/([A-Za-z0-9_-]{11})\/?$/.exec(url.pathname)?.[1] ?? null
+  if (url.hostname.endsWith('youtube.com')) {
+    const id = url.pathname === '/watch' ? url.searchParams.get('v') : /^\/(?:shorts|live)\/([A-Za-z0-9_-]{11})\/?$/.exec(url.pathname)?.[1]
+    return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null
+  }
+  // A host alone does not prove public provenance: admit public post/patch routes only.
+  if (url.hostname.endsWith('reddit.com')) return /^\/r\/[A-Za-z0-9_]+\/comments\/[a-z0-9]+(?:\/|$)/.test(url.pathname) ? 'article' : null
+  return /^\/(?:newsentry\/\d+|patches\/\d+(?:\.\d+)?[a-z]?)(?:\/|$)/.test(url.pathname) ? 'article' : null
+}
+
 function sourceUrl(source: RecordValue): string {
   if (!['bilibili', 'youtube', 'forum'].includes(String(source.origin)) ||
       !['transcript', 'article'].includes(String(source.material_type)))
     throw new CoachError('invalid_evidence', 'Only selected public articles or transcripts can be exported')
   let url: URL
+  let located: URL | undefined
+  if (/^https?:/i.test(String(source.locator))) {
+    try { located = new URL(String(source.locator)) } catch { throw new CoachError('invalid_evidence', 'A public source URL is required') }
+    if (!publicResource(located)) throw new CoachError('invalid_evidence', 'Source must identify a supported public resource')
+  }
   if (source.origin === 'bilibili' && /^BV[A-Za-z0-9]{10}$/.test(String(source.source_id)))
     url = new URL(`https://www.bilibili.com/video/${source.source_id}`)
   else if (source.origin === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(String(source.source_id)))
@@ -20,15 +38,21 @@ function sourceUrl(source: RecordValue): string {
     try { url = new URL(String(source.locator)) }
     catch { throw new CoachError('invalid_evidence', 'A public source URL is required') }
   }
-  if (url.protocol !== 'https:' || url.username || url.password || url.port || !publicHosts.has(url.hostname))
-    throw new CoachError('invalid_evidence', 'Source must have a supported public HTTPS URL')
+  const resource = publicResource(url)
+  if (!resource || (located && (publicResource(located) !== resource ||
+      located.hostname.replace(/^(?:www\.|old\.)/, '').replace('youtu.be', 'youtube.com') !== url.hostname.replace(/^www\./, '').replace('youtu.be', 'youtube.com'))))
+    throw new CoachError('invalid_evidence', 'Source must identify the same supported public resource')
   // Publish canonical video IDs, never provider session or tracking parameters.
   const video = url.searchParams.get('v')
-  const time = url.searchParams.get('t')
+  const time = (located ?? url).searchParams.get('t')
+  const start = (located ?? url).searchParams.get('start')
+  const part = (located ?? url).searchParams.get('p')
   url.search = ''
   url.hash = ''
   if (['youtube.com', 'www.youtube.com'].includes(url.hostname) && video && /^[A-Za-z0-9_-]{11}$/.test(video)) url.searchParams.set('v', video)
-  if (time && /^\d+s?$/.test(time)) url.searchParams.set('t', time)
+  if (time && /^\d{1,7}s?$/.test(time)) url.searchParams.set('t', time)
+  if (url.hostname.endsWith('youtube.com') && start && /^\d{1,7}$/.test(start)) url.searchParams.set('start', start)
+  if (url.hostname.endsWith('bilibili.com') && part && /^[1-9]\d{0,3}$/.test(part)) url.searchParams.set('p', part)
   return url.toString()
 }
 
