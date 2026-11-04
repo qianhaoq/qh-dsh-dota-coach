@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.4 — M0 match derived facts
+
+- dota_match 默认附加金钱/经验、人头差、最差五分钟窗、死亡/目标及关键出装时序事实；保留 missing，新增 missing_fields。
+- Add offline-tested match derivations with focus-team context and explicit missing data; purchases report facts only.
+
 ## 0.6.3 — A2UI replay review
 
 - AI-authored A2UI v0.9.1 compositions for phase reports and follow-up answers, with a validated Dota review catalog and a React renderer.
