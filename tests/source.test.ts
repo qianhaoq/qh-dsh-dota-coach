@@ -38,6 +38,42 @@ const successful = (): ToolExecutionResult => ({
   value: material,
   content: [{ type: 'text', text: JSON.stringify(material) }],
 })
+test('video discovery preserves host policy and never imports search results as knowledge', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'dota-source-search-'))
+  const ctx = new Context()
+  new SystemPrompt(ctx, {})
+  new Tools(ctx, {})
+  const service = new CoachService(ctx, Config({ memoryEnabled: false }), home, '.')
+  t.after(async () => { await service.dispose(); await rm(home, { recursive: true, force: true }) })
+  let denied = true, calls = 0
+  ctx.tools.register(defineTool({
+    name: 'bili_search', description: 'Synthetic public video discovery',
+    parameters: { query: { type: 'string', required: true } },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_a, value) => [{type:'text',text:JSON.stringify(value)}] },
+    async execute() { calls++; return {items:[{title:'Fixture',url:'https://www.bilibili.com/video/BV1xx411c7mD'}]} },
+  }))
+  for (const tool of makeTools((name, args, exec) => service.invokeTool(name, args, exec))) ctx.tools.register(tool)
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    if (exec.name === 'bili_search') {
+      assert.equal(exec.rootCallId,'search-root')
+      assert.equal(typeof exec.parent,'symbol')
+      if (denied) return {kind:'deny',reason:'Fixture denial'}
+    }
+    return next()
+  })
+  const invoke = () => ctx.tools.execute({ callId:'search-root' as ToolRunContext['callId'], name:'dota_source',
+    arguments:{action:'search',provider_tool:'bili_search',query:'Dota objectives'}, signal:new AbortController().signal })
+  const blocked = await invoke()
+  assert.equal((blocked.value as {reason:string}).reason,'source_search_failed')
+  assert.equal(calls,0)
+  denied = false
+  const result = await invoke()
+  assert.equal((result.value as {evidence_level:string}).evidence_level,'discovery_only')
+  assert.equal(calls,1)
+  assert.equal(service.store.list('source').length,0)
+  assert.equal(service.store.list('note').length,0)
+  assert.equal((await service.invoke('dota_source',{action:'search',provider_tool:'yt_search',query:'Dota'})).reason,'source_provider_unavailable')
+})
 test('published source dispatch preserves parent policy and forwards deferred context', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'dota-source-sdk-'))
   const ctx = new Context()

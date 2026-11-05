@@ -76,6 +76,14 @@ dsh plugin --profile web add ./qh-dsh-dota-coach-0.6.3-linux-x64.tgz
 
 工具输出超过预算会保存为本地 JSON 并返回文件指针。`dota_source get` 支持 `offset/max_chars` 分段读取，原始内容哈希保持不变。
 
+## 视频发现与公开站点快照
+
+在 DSH 会话调用 `dota_source`，传入 `action=search`、`provider_tool=bili_search` 或 `yt_search`，以及该提供方的 `provider_args`（缺省使用 `{query}`）。搜索结果仅用于发现材料，不会写入知识。接着用既有 `fetch` 读取字幕／正文；提供方缺失或拒绝访问时明确报错，也可手工 `import` 带定位的正文。
+
+对已阅读的材料，用 `dota_coach_note` 保存短摘要、来源记录与版本戳。需要公开时显式调用 `dota_kb`：`{action:"export", ids:["选中的 note ID"]}`。它原子写入本地 `export/site/knowledge.v1.json`，协议为 `dota2.ai/site-knowledge@1`。空选择、私人笔记、待复检和已被修订替代的条目会拒绝导出；不扫描或导出全部知识、原始字幕、录像、账号或训练记录。
+
+快照仅包含选中摘要、公开来源 URL、时间定位、采集时间、来源哈希和适用版本。公开 ID 与本地记录 ID 分离。导出不上传文件；将审核过的快照作为独立 PR 放入网站的 `data/site-knowledge.v1.json` 后，网站只读使用。完成复盘后的训练目标继续通过 `dota_training` 留在本机。
+
 ## 证据范围
 
 OpenDota 提供事件、装备、经济和统计；录像轨迹提供实体位置与眼位创建/删除记录。未解析比赛和缺失字段会明确标记。OpenDota 请求使用缓存、并发合并和可配置限速，尊重响应头和 `Retry-After`；本地策略不代表永久 API 额度。

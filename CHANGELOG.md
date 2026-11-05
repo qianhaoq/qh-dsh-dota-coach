@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.5 — Public learning snapshot (unreleased)
+
+- Add policy-preserving video discovery through installed `bili_search` / `yt_search` tools; discovery results never become learned evidence by themselves.
+- Export explicitly selected public knowledge summaries to `export/site/knowledge.v1.json`, retaining source URLs, locators, capture dates and hashes while excluding private records.
+- Preserve the pinned DSH 0.2.1-rc.3 runtime and all existing replay, memory and training behavior.
+
 ## 0.6.4 — M0 match derived facts
 
 - dota_match 默认附加金钱/经验、人头差、最差五分钟窗、死亡/目标及关键出装时序事实；保留 missing，新增 missing_fields。
