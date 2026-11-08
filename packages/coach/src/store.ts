@@ -20,10 +20,14 @@ const sourceInput = z.object({
   body: text.max(2_000_000),
   locator: text,
   material_type: z.enum(['transcript', 'article', 'user_notes', 'comment']).default('user_notes'),
-  origin: z.enum(['user_import', 'bilibili', 'youtube', 'forum', 'match']).default('user_import'),
+  origin: z.enum(['user_import', 'bilibili', 'youtube', 'forum', 'official', 'match']).default('user_import'),
   patch: z.string().default('unknown'),
   hero: z.string().default(''),
   tags: z.array(z.string()).default([]),
+  evidence_level: z.enum(['subtitle_full', 'frames_checked', 'title_only', 'post_body', 'comments_only']).optional(),
+  retrieval: z.object({ method: text, url: text, response_hash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
+  published_at: z.iso.datetime().nullable().optional(),
+  captured_at: z.iso.datetime().optional(),
   completeness: z.enum(['full', 'excerpt', 'unknown']).default('unknown'),
 })
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
@@ -463,7 +467,7 @@ export class CoachStore {
       const row = this.put('source', {
         ...input,
         content_hash,
-        captured_at: now(),
+        captured_at: input.captured_at || now(),
         evidence_status: 'readable_material',
       })
       this.db.prepare('INSERT INTO dedupe VALUES(?,?)').run(key, String(row.id))

@@ -685,7 +685,7 @@ export class CoachService {
     return json({ ok: true, evidence_level: 'discovery_only', provider_tool: provider, content: outcome.content })
   }
   private providers(): string[] {
-    return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json'].filter(
+    return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json'].filter(
       (t) => !!this.ctx.tools.get(t),
     )
   }
@@ -740,10 +740,11 @@ export class CoachService {
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error
     }
-    if (
-      payload.ok === false ||
-      ['title_only', 'comments_only'].includes(String(payload.evidence_level))
-    )
+    if (payload.ok === false)
+      throw new CoachError('source_fetch_failed', 'Public source provider returned no usable material', {
+        reason: String(payload.reason || 'provider_unavailable'),
+      })
+    if (['title_only', 'comments_only'].includes(String(payload.evidence_level)))
       throw new CoachError('source_body_missing', 'Provider did not return source body evidence')
     const post = raw(payload.post)
     const body =
@@ -765,6 +766,9 @@ export class CoachService {
         'source_body_missing',
         'Provider returned no full readable body; import its transcript text',
       )
+    if (payload.url && a.locator && /^https?:/i.test(String(a.locator)) &&
+        new URL(String(a.locator)).pathname.replace(/\/$/, '') !== new URL(String(payload.url)).pathname.replace(/\/$/, ''))
+      throw new CoachError('invalid_evidence', 'Provider URL does not match the requested locator')
     const sourceId = String(
       payload.source_id || a.source_id || (payload.bvid ? String(payload.bvid) : ''),
     )
@@ -784,9 +788,16 @@ export class CoachService {
           `returned transcript · ${payload.language || payload.lang || 'language unknown'}`,
       ),
       body,
+      patch: typeof payload.patch === 'string' ? payload.patch : 'unknown',
+      evidence_level: provider.endsWith('subtitle') ? 'subtitle_full' : 'post_body',
+      retrieval: payload.retrieval || null,
+      published_at: payload.published_at || null,
+      ...(typeof payload.captured_at === 'string' ? { captured_at: payload.captured_at } : {}),
       material_type: provider.endsWith('subtitle') ? 'transcript' : 'article',
-      completeness: payload.truncated ? 'excerpt' : 'unknown',
-      origin: provider.startsWith('bili')
+      completeness: payload.truncated ? 'excerpt' : payload.completeness === 'full' ? 'full' : 'unknown',
+      origin: provider === 'official_patch_json'
+        ? 'official'
+        : provider.startsWith('bili')
         ? 'bilibili'
         : provider.startsWith('yt')
           ? 'youtube'

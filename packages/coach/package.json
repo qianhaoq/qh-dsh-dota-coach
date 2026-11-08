@@ -37,6 +37,10 @@
     "./types": {
       "types": "./lib/types/types.d.ts",
       "default": "./lib/types/types.js"
+    },
+    "./public-source": {
+      "types": "./lib/types/public-source.d.ts",
+      "default": "./lib/public-source.js"
     }
   },
   "files": [

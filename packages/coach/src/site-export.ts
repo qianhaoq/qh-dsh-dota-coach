@@ -65,6 +65,15 @@ export function buildSiteSnapshot(store: CoachStore, ids: unknown, generatedAt =
       throw new CoachError('invalid_evidence', 'Recheck or superseded knowledge cannot be published')
     const source = store.get(String(note.source_record_id), 'source')
     const source_url = sourceUrl(source)
+    // Revalidate durable evidence on promotion, including edits made outside the tools.
+    if (typeof source.body !== 'string' || source.body.trim().length < 20 ||
+        createHash('sha256').update(source.body).digest('hex') !== source.content_hash ||
+        source.source_id !== note.source_id || source.completeness === 'excerpt' ||
+        ['title_only', 'comments_only'].includes(String(source.evidence_level)))
+      throw new CoachError('invalid_evidence', 'Source body hash, identity or completeness failed validation')
+    if (note.category === 'fact' && (note.patch === 'unknown' || note.patch !== source.patch ||
+        (source.hero && note.hero !== source.hero)))
+      throw new CoachError('invalid_evidence', 'Patch facts require the exact source patch and applicable hero')
     if (typeof note.body !== 'string' || note.body.length > 2000 ||
         typeof source.content_hash !== 'string' || !/^[a-f0-9]{64}$/.test(source.content_hash))
       throw new CoachError('invalid_evidence', 'A short supported summary and source hash are required')
@@ -75,6 +84,8 @@ export function buildSiteSnapshot(store: CoachStore, ids: unknown, generatedAt =
       source_url, source_date: String(source.captured_at), content_hash: source.content_hash,
       locator: /^(?:\d{1,3}:\d{2})(?:\s*[–-]\s*\d{1,3}:\d{2})?$/.test(String(source.locator)) ? String(source.locator) : source_url,
       verification: 'material_linked_not_independently_verified',
+      evidence_level: String(source.evidence_level || (source.material_type === 'transcript' ? 'subtitle_full' : 'post_body')),
+      completeness: String(source.completeness || 'unknown'),
     }
     if (entry.title.length > 300 || entry.hero.length > 100 || entry.patch.length > 100 || entry.stamp.length > 500 ||
         entry.source_url.length > 2048 || !Number.isFinite(Date.parse(entry.source_date)))

@@ -91,3 +91,31 @@ test('private/account routes and mismatched video locators are not public proven
   const post = material(store,'public post',true,{source_id:'public-post',origin:'forum',material_type:'article',locator:'https://www.reddit.com/r/DotA2/comments/abc123/public_post/?token=private'})
   assert.equal((buildSiteSnapshot(store,[post.id]).entries as RecordValue[])[0]!.source_url,'https://www.reddit.com/r/DotA2/comments/abc123/public_post/')
 })
+
+test('promotion rehashes durable bodies and refuses excerpt or mismatched patch facts', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-site-integrity-'))
+  const store = new CoachStore(home)
+  t.after(async () => {
+    store.close()
+    await rm(home, { recursive: true, force: true })
+  })
+  const note = material(store)
+  const source = store.get(String(note.source_record_id), 'source')
+  const mutate = (row: RecordValue) =>
+    store.db
+      .prepare('UPDATE records SET data=? WHERE id=?')
+      .run(JSON.stringify(row), String(row.id))
+  mutate({
+    ...source,
+    body: 'Tampered text which must never be exported as the original material.',
+  })
+  assert.throws(() => buildSiteSnapshot(store, [note.id]), /hash/)
+  mutate({ ...source, completeness: 'excerpt' })
+  assert.throws(() => buildSiteSnapshot(store, [note.id]), /completeness/)
+  mutate(source)
+  mutate({ ...note, category: 'fact', patch: '7.41' })
+  assert.throws(() => buildSiteSnapshot(store, [note.id]), /exact source patch/)
+  mutate({ ...note, category: 'fact', patch: '7.41f' })
+  assert.equal((buildSiteSnapshot(store, [note.id]).entries as RecordValue[])[0]!.patch, '7.41f')
+  assert.equal(store.kbGet({ id: note.id!, current_patch: '7.41' }).record !== undefined, true)
+})
