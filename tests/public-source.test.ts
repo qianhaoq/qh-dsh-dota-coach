@@ -275,3 +275,62 @@ test('learning profile policy denies promotion, principles and unrelated tools a
     await fiber.dispose()
   }
 })
+
+test('single admitted Steam guide fails closed on boundaries and incomplete sections', async () => {
+  const { readSupportGuide, supportGuideUrl } = await import(
+    '../packages/coach/src/public-source.ts'
+  )
+  const html =
+    '<div class="apphub_AppName ellipsis">Dota 2</div>' +
+    '<div class="workshopItemTitle">How to play Support in Dota 2</div>' +
+    Array.from(
+      { length: 10 },
+      (_, i) =>
+        `<div class="subSection detailBox" id="${i}"><div class="subSectionTitle">Section ${i}</div><div class="subSectionDesc"><div>Conditional advice for synthetic parser contract. ${'Evidence text. '.repeat(10)}</div></div></div>`,
+    ).join('')
+  const reply = (body: string) => new Response(body, { headers: { 'content-type': 'text/html' } })
+  const result = await readSupportGuide(
+    supportGuideUrl,
+    new AbortController().signal,
+    async (url, options) => {
+      assert.equal(url, supportGuideUrl)
+      assert.equal(options?.redirect, 'error')
+      assert.equal(options?.credentials, 'omit')
+      return reply(html)
+    },
+  )
+  const hiddenNotice =
+    '<div class="bannedNotification" id="bannedNotification" style="display: none" >This item has been removed</div>'
+  const withHiddenNotice = await readSupportGuide(
+    supportGuideUrl,
+    new AbortController().signal,
+    async () => reply(hiddenNotice + html),
+  )
+  assert.equal(withHiddenNotice.body, result.body)
+  assert.equal(result.patch, 'unknown')
+  assert.equal(result.published_at, null)
+  assert.equal(result.retrieval.section_count, 10)
+  assert.match(result.retrieval.permission, /human review required/)
+  assert.equal(result.body.split('\n\n').length, 10)
+  assert.doesNotMatch(result.body, /<div/)
+  for (const url of [
+    supportGuideUrl + '&x=1',
+    supportGuideUrl.replace('827490913', '1'),
+    supportGuideUrl.replace('https:', 'http:'),
+    supportGuideUrl.replace('steamcommunity.com', 'localhost'),
+  ])
+    await assert.rejects(
+      readSupportGuide(url, new AbortController().signal, async () => {
+        throw Error('must not request')
+      }),
+    )
+  for (const body of [
+    html.replace('Dota 2</div>', 'Other</div>'),
+    html.slice(0, -6),
+    html.replace('id="9"', 'id="0"'),
+    'This item has been removed' + html,
+  ])
+    await assert.rejects(
+      readSupportGuide(supportGuideUrl, new AbortController().signal, async () => reply(body)),
+    )
+})

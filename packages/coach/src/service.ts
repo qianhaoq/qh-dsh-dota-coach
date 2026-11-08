@@ -685,7 +685,7 @@ export class CoachService {
     return json({ ok: true, evidence_level: 'discovery_only', provider_tool: provider, content: outcome.content })
   }
   private providers(): string[] {
-    return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json'].filter(
+    return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json', 'steam_support_guide'].filter(
       (t) => !!this.ctx.tools.get(t),
     )
   }

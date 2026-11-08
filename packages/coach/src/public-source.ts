@@ -64,6 +64,116 @@ export async function readOfficialPatch(input: string, signal: AbortSignal, requ
   }
 }
 
+/** One independently admitted public guide. No arbitrary HTML fetch or linked resources. */
+export const supportGuideUrl = 'https://steamcommunity.com/sharedfiles/filedetails/?id=827490913'
+
+export function parseSupportGuide(html: string) {
+  if (
+    !html.includes('<div class="apphub_AppName ellipsis">Dota 2</div>') ||
+    !html.includes('<div class="workshopItemTitle">How to play Support in Dota 2</div>') ||
+    /This item has been removed/.test(
+      html.replace(
+        /<div class="bannedNotification" id="bannedNotification" style="display: none" >[\s\S]*?<\/div>/,
+        '',
+      ),
+    )
+  )
+    throw new Error('Public Dota guide identity unavailable')
+  const sections = [...html.matchAll(/<div class="subSection detailBox" id="(\d+)">/g)]
+  if (sections.length !== 10 || new Set(sections.map((s) => s[1])).size !== 10)
+    throw new Error('Complete guide sections unavailable')
+  const text = (value: string) =>
+    value
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&#(x[0-9a-f]+|\d+);/gi, (_, n: string) => {
+        const cp = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1), 16) : Number(n)
+        return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : ' '
+      })
+      .replace(
+        /&(amp|lt|gt|quot|apos|nbsp);/g,
+        (_, n: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' })[n]!,
+      )
+      .replace(/\s+/g, ' ')
+      .trim()
+  const bodies = sections.map((section) => {
+    const start = section.index! + section[0].length
+    let depth = 1,
+      end = -1
+    const tags = /<div\b[^>]*>|<\/div\s*>/gi
+    tags.lastIndex = start
+    for (let tag; (tag = tags.exec(html)); ) {
+      depth += /^<\//.test(tag[0]) ? -1 : 1
+      if (!depth) {
+        end = tag.index
+        break
+      }
+    }
+    if (end < 0) throw new Error('Truncated guide section')
+    const fragment = html.slice(start, end)
+    if (
+      !fragment.includes('class="subSectionTitle"') ||
+      !fragment.includes('class="subSectionDesc"')
+    )
+      throw new Error('Guide section body missing')
+    return text(fragment)
+  })
+  const body = bodies.join('\n\n')
+  if (body.length < 1000 || body.length > 18000)
+    throw new Error('Guide body outside bounded read limit')
+  return { body, section_count: bodies.length }
+}
+
+export async function readSupportGuide(input: string, signal: AbortSignal, request = fetch) {
+  if (input !== supportGuideUrl)
+    throw new Error('Only the independently admitted support guide URL is allowed')
+  const response = await request(input, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
+    redirect: 'error',
+    credentials: 'omit',
+    headers: { Accept: 'text/html' },
+  })
+  if (
+    !response.ok ||
+    !response.body ||
+    !response.headers.get('content-type')?.includes('text/html')
+  )
+    throw new Error('Public guide unavailable')
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  for await (const chunk of response.body) {
+    bytes += chunk.byteLength
+    if (bytes > 1_000_000) throw new Error('Guide response exceeds limit')
+    chunks.push(chunk)
+  }
+  const raw = Buffer.concat(chunks).toString('utf8')
+  const { body, section_count } = parseSupportGuide(raw)
+  const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+  return {
+    ok: true,
+    source_id: 'steam-guide-827490913',
+    title: 'How to play Support in Dota 2 (Steam Community author advice)',
+    body,
+    url: input,
+    patch: 'unknown',
+    evidence_level: 'post_body',
+    completeness: 'full',
+    captured_at: new Date().toISOString(),
+    published_at: null,
+    content_hash: hash(body),
+    retrieval: {
+      method: 'anonymous_public_steam_guide',
+      url: input,
+      response_hash: hash(raw),
+      section_count,
+      attribution: 'Steam Community guide authors; see original guide',
+      permission:
+        'No republication permission established; human review required; summary and link only',
+    },
+  }
+}
+
 /** A single anonymous public post, never comments, search results, cookies or redirects. */
 export async function readPublicPost(input: string, signal: AbortSignal, request = fetch) {
   const url = new URL(input)
@@ -150,22 +260,27 @@ export function apply(ctx: Context, config: { learningOnly?: boolean; sourceUrl?
     ctx.on('tools/pre-execute', async (exec, next) => {
       const args = exec.arguments as Record<string, unknown>
       const allowed =
-        ['reddit_json', 'official_patch_json'].includes(exec.name) ||
+        ['reddit_json', 'official_patch_json', 'steam_support_guide'].includes(exec.name) ||
         (exec.name === 'dota_source' && ['fetch', 'get', 'list'].includes(String(args.action))) ||
         (exec.name === 'dota_kb' && ['search', 'get', 'status'].includes(String(args.action))) ||
         (exec.name === 'dota_coach_note' && args.action === 'append' && args.kind === 'fact')
-      const requested = ['reddit_json', 'official_patch_json'].includes(exec.name)
+      const requested = ['reddit_json', 'official_patch_json', 'steam_support_guide'].includes(
+        exec.name,
+      )
         ? args.url
         : (args.provider_args as Record<string, unknown> | undefined)?.url
       if (
         !allowed ||
         ++calls > 12 ||
-        (['reddit_json', 'official_patch_json', 'dota_source'].includes(exec.name) &&
+        (['reddit_json', 'official_patch_json', 'steam_support_guide', 'dota_source'].includes(
+          exec.name,
+        ) &&
           args.action !== 'get' &&
           args.action !== 'list' &&
           config.sourceUrl &&
           requested !== config.sourceUrl) ||
-        (['reddit_json', 'official_patch_json'].includes(exec.name) && ++reads > 1) ||
+        (['reddit_json', 'official_patch_json', 'steam_support_guide'].includes(exec.name) &&
+          ++reads > 1) ||
         (exec.name === 'dota_source' && args.action === 'fetch' && ++fetches > 1) ||
         (exec.name === 'dota_coach_note' && ++notes > 1)
       )
@@ -177,6 +292,31 @@ export function apply(ctx: Context, config: { learningOnly?: boolean; sourceUrl?
       return next()
     })
   }
+  ctx.effect(() =>
+    ctx.tools.register(
+      defineTool({
+        name: 'steam_support_guide',
+        description:
+          'Read the single admitted public Steam support guide, all ten text sections. Unknown patch; old author advice requires human review. Never infer current applicability.',
+        parameters: { url: { type: 'string', required: true } },
+        output: {
+          schema: { type: 'object', additionalProperties: true },
+          render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+        },
+        async execute(args, exec) {
+          try {
+            return await readSupportGuide(String(args.url), exec.signal)
+          } catch {
+            return {
+              ok: false,
+              reason: 'public_guide_unavailable',
+              message: 'No complete admitted public guide imported.',
+            }
+          }
+        },
+      }),
+    ),
+  )
   ctx.effect(() =>
     ctx.tools.register(
       defineTool({

@@ -25,7 +25,7 @@ const sourceInput = z.object({
   hero: z.string().default(''),
   tags: z.array(z.string()).default([]),
   evidence_level: z.enum(['subtitle_full', 'frames_checked', 'title_only', 'post_body', 'comments_only']).optional(),
-  retrieval: z.object({ method: text, url: text, response_hash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
+  retrieval: z.object({ method: text, url: text, response_hash: z.string().regex(/^[a-f0-9]{64}$/), section_count: z.number().int().positive().optional(), attribution: text.optional(), permission: text.optional() }).nullable().optional(),
   published_at: z.iso.datetime().nullable().optional(),
   captured_at: z.iso.datetime().optional(),
   completeness: z.enum(['full', 'excerpt', 'unknown']).default('unknown'),

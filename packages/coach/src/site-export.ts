@@ -5,10 +5,11 @@ import type { CoachStore } from './store.ts'
 import type { RecordValue } from './types.ts'
 
 const selection = z.array(z.string().trim().min(1)).min(1).max(100)
-const publicHosts = new Set(['bilibili.com', 'www.bilibili.com', 'youtube.com', 'www.youtube.com', 'youtu.be', 'reddit.com', 'www.reddit.com', 'old.reddit.com', 'dota2.com', 'www.dota2.com'])
+const publicHosts = new Set(['bilibili.com', 'www.bilibili.com', 'youtube.com', 'www.youtube.com', 'youtu.be', 'reddit.com', 'www.reddit.com', 'old.reddit.com', 'dota2.com', 'www.dota2.com', 'steamcommunity.com'])
 
 function publicResource(url: URL): string | null {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || !publicHosts.has(url.hostname)) return null
+  if (url.hostname === 'steamcommunity.com') return url.href === 'https://steamcommunity.com/sharedfiles/filedetails/?id=827490913' ? 'steam-guide-827490913' : null
   if (url.hostname.endsWith('bilibili.com')) return /^\/video\/(BV[A-Za-z0-9]{10})\/?$/.exec(url.pathname)?.[1] ?? null
   if (url.hostname === 'youtu.be') return /^\/([A-Za-z0-9_-]{11})\/?$/.exec(url.pathname)?.[1] ?? null
   if (url.hostname.endsWith('youtube.com')) {
@@ -47,8 +48,10 @@ function sourceUrl(source: RecordValue): string {
   const time = (located ?? url).searchParams.get('t')
   const start = (located ?? url).searchParams.get('start')
   const part = (located ?? url).searchParams.get('p')
+  const steamGuide = url.hostname === 'steamcommunity.com'
   url.search = ''
   url.hash = ''
+  if (steamGuide) url.searchParams.set('id', '827490913')
   if (['youtube.com', 'www.youtube.com'].includes(url.hostname) && video && /^[A-Za-z0-9_-]{11}$/.test(video)) url.searchParams.set('v', video)
   if (time && /^\d{1,7}s?$/.test(time)) url.searchParams.set('t', time)
   if (url.hostname.endsWith('youtube.com') && start && /^\d{1,7}$/.test(start)) url.searchParams.set('start', start)

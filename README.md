@@ -120,3 +120,7 @@ pnpm pack:release
 见 [架构与知识治理](docs/architecture.zh-CN.md)、[贡献指南](CONTRIBUTING.md)、[变更记录](CHANGELOG.md) 和 [第三方声明](packages/coach/NOTICE)。
 
 MIT © Hao Qian。比赛数据和依赖仍适用各自来源条款。项目专注赛后教学。
+
+Public tactical text learning runs in background dsh exactly `0.2.1-rc.3`, using the ordinary configured model and the bounded [learn-once workflow](docs/learning-once.md). The independently admitted Steam support guide retains full text and hashes with unknown patch identity. The model writes a candidate before a separate human curator reviews it. Explicit selected export follows review and applicability checks; the public thin site receives only the readonly snapshot and contextual source links. This is a local workflow, not deployment or proof of tactical effectiveness.
+
+Current local evidence and the explicit human-review blocker are documented in [tactical acceptance](docs/tactical-acceptance.md). One real model-generated tactical candidate is preserved; promotion/export and actual site citation acceptance remain incomplete.

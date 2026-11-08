@@ -183,7 +183,7 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
         captured_at: string,
         origin: enumeration('user_import', 'bilibili', 'youtube', 'forum', 'official', 'match'),
         tags: strings,
-        provider_tool: enumeration('bili_search', 'yt_search', 'bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json'),
+        provider_tool: enumeration('bili_search', 'yt_search', 'bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json', 'steam_support_guide'),
         offset: number,
         max_chars: number,
         provider_args: { type: 'object', additionalProperties: true },

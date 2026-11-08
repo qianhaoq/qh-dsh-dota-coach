@@ -119,3 +119,19 @@ test('promotion rehashes durable bodies and refuses excerpt or mismatched patch 
   assert.equal((buildSiteSnapshot(store, [note.id]).entries as RecordValue[])[0]!.patch, '7.41f')
   assert.equal(store.kbGet({ id: note.id!, current_patch: '7.41' }).record !== undefined, true)
 })
+
+test('only the admitted Steam guide citation is retained; unknown facts still fail promotion', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-steam-export-'))
+  const store = new CoachStore(home)
+  t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }) })
+  const url = 'https://steamcommunity.com/sharedfiles/filedetails/?id=827490913'
+  const note = material(store, '', true, { source_id: 'steam-guide-827490913', locator: url, origin: 'forum', material_type: 'article', patch: 'unknown' })
+  assert.equal((buildSiteSnapshot(store, [note.id]).entries as RecordValue[])[0].source_url, url)
+  const source = store.get(String(note.source_record_id), 'source')
+  const fact = store.note({ kind: 'fact', source_record_id: source.id!, source_id: source.source_id!, title: 'Unknown fixture', body: 'Unknown patch cannot be exported as a patch fact.', stamp: '[unknown · 2026-11-08 · steam-guide-827490913]', patch: 'unknown' }).record as RecordValue
+  assert.throws(() => buildSiteSnapshot(store, [fact.id]), /exact source patch/)
+  for (const locator of [url + '&x=1', url.replace('827490913', '1'), url + '#fragment']) {
+    const unsafe = material(store, locator, true, { source_id: 'steam-guide-827490913', locator, origin: 'forum', material_type: 'article' })
+    assert.throws(() => buildSiteSnapshot(store, [unsafe.id]), /public resource/)
+  }
+})
