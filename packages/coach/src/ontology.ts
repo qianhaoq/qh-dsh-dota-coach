@@ -30,8 +30,13 @@ const input = z.object({
     .default([]),
 })
 const digest = (body: string) => createHash('sha256').update(body).digest('hex')
-/** SQLite documents are authoritative; search is a disposable projection. No promotion API. */
+/** SQLite documents are authoritative; search is a disposable projection. Explicit human curation is recorded separately from source verification. */
 export class OntologyKB {
+  // Host-only grant: model-supplied reviewer text is never sufficient authorization.
+  private promotionGrants = new Set<string>()
+  authorizePromotion(args: RecordValue): void {
+    this.promotionGrants.add(digest(JSON.stringify(args)))
+  }
   constructor(private store: CoachStore) {
     store.db.exec(`
       CREATE TABLE IF NOT EXISTS ontology_nodes(id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -106,7 +111,10 @@ export class OntologyKB {
           ? this.get(text.parse(args.id))
           : undefined
       if (previous && !['Principle', 'FactClaim'].includes(String(previous.type)))
-        throw new CoachError('invalid_arguments', 'Lifecycle writes apply to claims, not shared taxonomy entities')
+        throw new CoachError(
+          'invalid_arguments',
+          'Lifecycle writes apply to claims, not shared taxonomy entities',
+        )
       if (previous && !['candidate', 'active'].includes(String(previous.state)))
         throw new CoachError('invalid_arguments', 'Only current nodes can be revised or archived')
       if (args.action === 'archive') {
@@ -136,7 +144,13 @@ export class OntologyKB {
         ...previous,
         ...args,
         source_record_id: args.source_record_id,
-        relations: args.relations ?? (Array.isArray(previous?.relations) ? (previous.relations as RecordValue[]).filter(e => ['supports', 'contradicts'].includes(String(e.relation))) : []),
+        relations:
+          args.relations ??
+          (Array.isArray(previous?.relations)
+            ? (previous.relations as RecordValue[]).filter((e) =>
+                ['supports', 'contradicts'].includes(String(e.relation)),
+              )
+            : []),
       })
       const source = this.store.get(data.source_record_id, 'source')
       if (
@@ -210,6 +224,57 @@ export class OntologyKB {
       return { ok: true, record: this.get(id) }
     })
   }
+  promote(args: RecordValue): RecordValue {
+    if (!this.promotionGrants.has(digest(JSON.stringify(args))))
+      throw new CoachError(
+        'invalid_evidence',
+        'Explicit host human-curation authorization required',
+      )
+    return this.store.transaction(() => {
+      const candidate = this.get(text.parse(args.id))
+      if (candidate.state !== 'candidate' || candidate.kind !== 'principle')
+        throw new CoachError('invalid_evidence', 'Human curation requires a candidate principle')
+      const curation = z
+        .object({
+          reviewer: text,
+          approval_ref: text,
+          decision: z.literal('approve_version_independent'),
+          rationale: text,
+          reviewed_at: text.datetime({ offset: true }),
+          timezone: z.literal('Asia/Shanghai'),
+          candidate_id: text,
+        })
+        .parse(args.curation)
+      const attribution = text.max(300).parse(args.attribution)
+      const applicability_boundary = text.max(500).parse(args.applicability_boundary)
+      if (String(candidate.body).length > 1000 || candidate.patch !== 'unknown')
+        throw new CoachError(
+          'invalid_evidence',
+          'Version-independent curation requires a short unknown-patch principle',
+        )
+      const source = this.store.get(String(candidate.source_record_id), 'source')
+      if (typeof source.body !== 'string' || digest(source.body) !== source.content_hash)
+        throw new CoachError('invalid_evidence', 'Source hash failed validation')
+      const legacy = this.store.get(curation.candidate_id, 'note')
+      if (legacy.source_record_id !== candidate.source_record_id)
+        throw new CoachError('invalid_evidence', 'Original candidate must have the same source')
+      const { history: _h, relations: _r, ...node } = candidate
+      this.save(
+        {
+          ...node,
+          state: 'active',
+          exportable: true,
+          applicability_scope: 'version_independent',
+          attribution,
+          applicability_boundary,
+          curation,
+          stamp: `[version-independent · historical author advice · ${source.source_id}]`,
+        },
+        'human_curated_promotion',
+      )
+      return { ok: true, record: this.get(String(candidate.id)) }
+    })
+  }
   search(args: RecordValue, recall = false): RecordValue {
     const limit = z
       .number()
@@ -237,8 +302,10 @@ export class OntologyKB {
         if (args.state && n.state !== args.state) return false
         if (args.kind && n.kind !== args.kind) return false
         for (const key of ['hero', 'role', 'phase'])
-          if (args[key] && (recall ? n[key] && n[key] !== args[key] : n[key] !== args[key])) return false
-        if (args.patch && n.patch !== args.patch) return false
+          if (args[key] && (recall ? n[key] && n[key] !== args[key] : n[key] !== args[key]))
+            return false
+        if (args.patch && n.patch !== args.patch && n.applicability_scope !== 'version_independent')
+          return false
         if (args.concept && !(Array.isArray(n.concepts) && n.concepts.includes(args.concept)))
           return false
         if (
@@ -262,16 +329,23 @@ export class OntologyKB {
         }
         return true
       })
-      .sort((a, b) => Number(Boolean(b.kind)) - Number(Boolean(a.kind)) || Number(b.kind === 'principle') - Number(a.kind === 'principle') || String(a.id).localeCompare(String(b.id)))
+      .sort(
+        (a, b) =>
+          Number(Boolean(b.kind)) - Number(Boolean(a.kind)) ||
+          Number(b.kind === 'principle') - Number(a.kind === 'principle') ||
+          String(a.id).localeCompare(String(b.id)),
+      )
       .slice(0, limit)
       .map((n) => ({
         ...n,
         applicability:
-          !args.patch || n.patch === 'unknown'
-            ? 'unknown'
-            : n.patch === args.patch
-              ? 'exact'
-              : 'outdated',
+          n.applicability_scope === 'version_independent'
+            ? 'version_independent'
+            : !args.patch || n.patch === 'unknown'
+              ? 'unknown'
+              : n.patch === args.patch
+                ? 'exact'
+                : 'outdated',
         instruction_status: 'retrieved_material_only',
       }))
     return { ok: true, authority: 'ontology-v1', candidate_use: 'unverified_material_only', items }
@@ -281,7 +355,7 @@ export class OntologyKB {
       schema: 'ontology-v1',
       authority: 'SQLite ontology_nodes + ontology_edges + append-only ontology_events',
       index: 'ontology_search (rebuildable)',
-      promotion: 'human_curation_required_not_implemented',
+      promotion: 'explicit_human_curation',
       counts: this.store.db
         .prepare(
           "SELECT json_extract(data,'$.type') AS type,json_extract(data,'$.state') AS state,COUNT(*) AS count FROM ontology_nodes GROUP BY type,state",

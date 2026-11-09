@@ -179,11 +179,26 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
         locator: string,
         material_type: enumeration('transcript', 'article', 'user_notes', 'comment'),
         completeness: enumeration('full', 'excerpt', 'unknown'),
-        evidence_level: enumeration('subtitle_full', 'frames_checked', 'title_only', 'post_body', 'comments_only'),
+        evidence_level: enumeration(
+          'subtitle_full',
+          'frames_checked',
+          'title_only',
+          'post_body',
+          'comments_only',
+        ),
         captured_at: string,
         origin: enumeration('user_import', 'bilibili', 'youtube', 'forum', 'official', 'match'),
         tags: strings,
-        provider_tool: enumeration('bili_search', 'yt_search', 'bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json', 'steam_support_guide'),
+        provider_tool: enumeration(
+          'bili_search',
+          'yt_search',
+          'bili_subtitle',
+          'yt_subtitle',
+          'forum_fetch',
+          'reddit_json',
+          'official_patch_json',
+          'steam_support_guide',
+        ),
         offset: number,
         max_chars: number,
         provider_args: { type: 'object', additionalProperties: true },
@@ -192,7 +207,7 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
     },
     dota_kb: {
       description:
-        'Read local knowledge from Markdown and SQLite notes without MemOS or network access. Search ranks stable principles before stamped patch facts; a stamp is not independent verification. Get a note/section by id, or a relative Markdown path (optionally #section). Cite stamp, evidence refs and applicability before coaching. Ontology is the persistent authority: create/revise/archive require source_record_id; writes are candidate only. Recall excludes candidates unless include_candidates=true; never treat them as verified. Search layer=ontology supports concept/relation/target and lifecycle filters. Legacy notes/MD remain readable. No active promotion API.',
+        'Read local knowledge from Markdown and SQLite notes without MemOS or network access. Search ranks stable principles before stamped patch facts; a stamp is not independent verification. Get a note/section by id, or a relative Markdown path (optionally #section). Cite stamp, evidence refs and applicability before coaching. Ontology is the persistent authority: create/revise/archive require source_record_id; writes are candidate only. Recall excludes candidates unless include_candidates=true; never treat them as verified. Search layer=ontology supports concept/relation/target and lifecycle filters. Legacy notes/MD remain readable. Promote records explicit human curator approval of a short version-independent principle; never invent approval.',
       parameters: {
         action: {
           ...enumeration(
@@ -205,9 +220,25 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
             'update',
             'revise',
             'archive',
+            'promote',
           ),
           required: true,
         },
+        curation: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            reviewer: { ...string, required: true },
+            approval_ref: { ...string, required: true },
+            decision: { ...enumeration('approve_version_independent'), required: true },
+            rationale: { ...string, required: true },
+            reviewed_at: { ...string, required: true },
+            timezone: { ...enumeration('Asia/Shanghai'), required: true },
+            candidate_id: { ...string, required: true },
+          },
+        },
+        attribution: string,
+        applicability_boundary: string,
         layer: enumeration('ontology'),
         concept: string,
         concepts: strings,
@@ -258,7 +289,11 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
         id: string,
         source_record_id: string,
         source_id: string,
-        stamp: { ...string, description: 'Required for append: literal square brackets [patch · YYYY-MM-DD · source ID], including both brackets.' },
+        stamp: {
+          ...string,
+          description:
+            'Required for append: literal square brackets [patch · YYYY-MM-DD · source ID], including both brackets.',
+        },
         title: string,
         body: string,
         match_id: number,

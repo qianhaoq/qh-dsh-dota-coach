@@ -330,7 +330,7 @@ export class CoachStore {
     if (String(args.id || '').startsWith('onto:')) {
       if (args.path) throw new CoachError('invalid_arguments', 'Provide exactly one of id or path')
       const node = this.ontology.get(String(args.id))
-      return { ok: true, record: { ...node, applicability: !args.current_patch || node.patch === 'unknown' ? 'unknown' : node.patch === args.current_patch ? 'exact' : 'outdated' } }
+      return { ok: true, record: { ...node, applicability: node.applicability_scope === 'version_independent' ? 'version_independent' : !args.current_patch || node.patch === 'unknown' ? 'unknown' : node.patch === args.current_patch ? 'exact' : 'outdated' } }
     }
     const input = z
       .object({

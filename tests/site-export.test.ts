@@ -135,3 +135,68 @@ test('only the admitted Steam guide citation is retained; unknown facts still fa
     assert.throws(() => buildSiteSnapshot(store, [unsafe.id]), /public resource/)
   }
 })
+
+test('human grant binds exact promotion payload; curated principle keeps unknown provenance and durable history', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-curation-'))
+  let store = new CoachStore(home)
+  t.after(async () => {
+    store.close()
+    await rm(home, { recursive: true, force: true })
+  })
+  const note = material(store, '', true, { patch: 'unknown' })
+  const candidate = store.ontology.write({
+    action: 'create',
+    kind: 'principle',
+    title: 'Conditional movement',
+    body: 'Check lane safety first.',
+    source_record_id: note.source_record_id!,
+    patch: 'unknown',
+    role: 'support',
+    phase: 'lane',
+  }).record as RecordValue
+  const approval: RecordValue = {
+    action: 'promote',
+    id: candidate.id!,
+    curation: {
+      reviewer: 'Fixture curator',
+      approval_ref: 'fixture approval',
+      decision: 'approve_version_independent',
+      rationale: 'Synthetic explicit approval',
+      reviewed_at: '2026-11-09T09:00:00+08:00',
+      timezone: 'Asia/Shanghai',
+      candidate_id: note.id!,
+    },
+    attribution: 'Fixture author',
+    applicability_boundary: 'Historical advice; assess the current situation.',
+  }
+  assert.throws(() => store.ontology.promote(approval), /authorization/)
+  store.ontology.authorizePromotion(approval)
+  assert.throws(
+    () => store.ontology.promote({ ...approval, attribution: 'Changed author' }),
+    /authorization/,
+  )
+  store.ontology.promote(approval)
+  assert.throws(() => store.ontology.promote(approval), /candidate principle/)
+  const snapshot = buildSiteSnapshot(store, [candidate.id!])
+  const entry = (snapshot.entries as RecordValue[])[0]
+  assert.equal(entry.patch, 'unknown')
+  assert.equal(entry.applicability_scope, 'version_independent')
+  assert.equal(entry.attribution, 'Fixture author')
+  assert.ok(!JSON.stringify(snapshot).includes('Fixture curator'))
+  for (const patch of ['7.41f', 'unknown', '60']) {
+    const hits = store.ontology.search({ patch, role: 'support', phase: 'lane' }, true)
+      .items as RecordValue[]
+    assert.equal(hits.length, 1)
+    assert.equal(hits[0].applicability, 'version_independent')
+  }
+  assert.equal((store.ontology.search({ phase: 'late' }, true).items as RecordValue[]).length, 0)
+  store.close()
+  store = new CoachStore(home)
+  assert.equal(store.ontology.get(String(candidate.id)).state, 'active')
+  const history = store.ontology.get(String(candidate.id)).history as RecordValue[]
+  assert.equal(history.at(-1)?.action, 'human_curated_promotion')
+  assert.deepEqual(
+    buildSiteSnapshot(store, [candidate.id!], String(snapshot.generated_at)),
+    snapshot,
+  )
+})

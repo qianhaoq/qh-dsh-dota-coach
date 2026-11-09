@@ -255,6 +255,7 @@ export class CoachService {
         await rename(temporary, path)
         return { ok: true, export_path: path, snapshot }
       }
+      if (a.action === 'promote') return this.store.ontology.promote(a)
       if (['create', 'revise', 'update', 'archive'].includes(String(a.action)))
         return this.store.ontology.write(a)
       if (a.action === 'recall') return this.store.ontology.search(a, true)
