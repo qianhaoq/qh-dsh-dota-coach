@@ -1,3 +1,4 @@
+import { OntologyKB } from './ontology.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -37,6 +38,7 @@ const stampPattern = /\[([^\]\n·]+)·([^\]\n·]+)·([^\]\n·]+)\]/
 /** Synchronous transactions serialize writes in one Host; WAL/busy_timeout cover other processes. */
 export class CoachStore {
   readonly db: DatabaseSync
+  readonly ontology: OntologyKB
   constructor(readonly home: string) {
     mkdirSync(home, { recursive: true, mode: 0o700 })
     this.ensurePatchScaffold()
@@ -52,6 +54,7 @@ export class CoachStore {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,kind UNINDEXED,body,tokenize='trigram');
       PRAGMA user_version=2; COMMIT;`)
+    this.ontology = new OntologyKB(this)
     this.transaction(() => {
       if (!this.kbFtsReady() || this.db.prepare('SELECT 1 FROM search LIMIT 1').get()) return
       const remove = this.db.prepare('DELETE FROM search WHERE id=?'),
@@ -84,6 +87,7 @@ export class CoachStore {
     return {
       ok: true,
       home: this.home,
+      ontology: this.ontology.status(),
       paths: {
         database: join(this.home, 'coach.sqlite'),
         principles: join(this.home, 'principles.md'),
@@ -323,6 +327,11 @@ export class CoachStore {
     return { ok: true, items: hits.slice(0, input.limit) }
   }
   kbGet(args: RecordValue): RecordValue {
+    if (String(args.id || '').startsWith('onto:')) {
+      if (args.path) throw new CoachError('invalid_arguments', 'Provide exactly one of id or path')
+      const node = this.ontology.get(String(args.id))
+      return { ok: true, record: { ...node, applicability: !args.current_patch || node.patch === 'unknown' ? 'unknown' : node.patch === args.current_patch ? 'exact' : 'outdated' } }
+    }
     const input = z
       .object({
         id: text.optional(),

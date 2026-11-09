@@ -262,8 +262,8 @@ export function apply(ctx: Context, config: { learningOnly?: boolean; sourceUrl?
       const allowed =
         ['reddit_json', 'official_patch_json', 'steam_support_guide'].includes(exec.name) ||
         (exec.name === 'dota_source' && ['fetch', 'get', 'list'].includes(String(args.action))) ||
-        (exec.name === 'dota_kb' && ['search', 'get', 'status'].includes(String(args.action))) ||
-        (exec.name === 'dota_coach_note' && args.action === 'append' && args.kind === 'fact')
+        (exec.name === 'dota_kb' && (['search', 'get', 'status', 'recall'].includes(String(args.action)) ||
+          (args.action === 'create' && args.kind === 'fact' && (!args.state || args.state === 'candidate'))))
       const requested = ['reddit_json', 'official_patch_json', 'steam_support_guide'].includes(
         exec.name,
       )
@@ -282,12 +282,12 @@ export function apply(ctx: Context, config: { learningOnly?: boolean; sourceUrl?
         (['reddit_json', 'official_patch_json', 'steam_support_guide'].includes(exec.name) &&
           ++reads > 1) ||
         (exec.name === 'dota_source' && args.action === 'fetch' && ++fetches > 1) ||
-        (exec.name === 'dota_coach_note' && ++notes > 1)
+        (exec.name === 'dota_kb' && args.action === 'create' && ++notes > 1)
       )
         return {
           kind: 'deny',
           reason:
-            'Bounded candidate learning permits one source, one fact note and reads only; promotion requires separate review',
+            'Bounded candidate learning permits one source, one candidate ontology fact and reads only; promotion requires separate review',
         }
       return next()
     })

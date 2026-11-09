@@ -249,15 +249,34 @@ export class CoachService {
         const snapshot = buildSiteSnapshot(this.store, a.ids)
         const dir = join(this.home, 'export', 'site')
         await mkdir(dir, { recursive: true, mode: 0o700 })
-        const path = join(dir, 'knowledge.v1.json'), temporary = `${path}.${randomUUID()}.tmp`
+        const path = join(dir, 'knowledge.v1.json'),
+          temporary = `${path}.${randomUUID()}.tmp`
         await writeFile(temporary, JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 })
         await rename(temporary, path)
         return { ok: true, export_path: path, snapshot }
       }
-      if (a.action === 'search') return this.store.kbSearch(a)
+      if (['create', 'revise', 'update', 'archive'].includes(String(a.action)))
+        return this.store.ontology.write(a)
+      if (a.action === 'recall') return this.store.ontology.search(a, true)
+      if (a.action === 'search') {
+        if (a.layer === 'ontology' || !a.query || a.concept || a.relation || a.state)
+          return this.store.ontology.search(a)
+        const legacy = this.store.kbSearch(a)
+        const ontology = this.store.ontology.search(a)
+        return {
+          ...legacy,
+          items: [...(ontology.items as RecordValue[]), ...(legacy.items as RecordValue[])].slice(
+            0,
+            Number(a.limit) || 10,
+          ),
+        }
+      }
       if (a.action === 'get') return this.store.kbGet(a)
       if (a.action === 'status') return this.store.kbStatus()
-      throw new CoachError('invalid_arguments', 'Use search/get/status/export for dota_kb')
+      throw new CoachError(
+        'invalid_arguments',
+        'Use search/get/status/recall/create/revise/archive/export for dota_kb',
+      )
     }
     if (name === 'dota_source')
       return a.action === 'search' ? this.searchSources(a, signal, exec) : a.action === 'fetch' ? this.fetchSource(a, signal, exec) : this.store.source(a)

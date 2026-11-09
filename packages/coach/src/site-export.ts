@@ -63,6 +63,8 @@ function sourceUrl(source: RecordValue): string {
 export function buildSiteSnapshot(store: CoachStore, ids: unknown, generatedAt = new Date().toISOString()): RecordValue {
   const chosen = [...new Set(selection.parse(ids))]
   const entries = chosen.map(id => {
+    if (id.startsWith('onto:'))
+      throw new CoachError('invalid_evidence', 'Ontology candidates require separate human curation; active export bridge is not enabled')
     const note = store.get(id, 'note')
     if (note.superseded_by || note.needs_recheck || !['fact', 'principle'].includes(String(note.category)))
       throw new CoachError('invalid_evidence', 'Recheck or superseded knowledge cannot be published')

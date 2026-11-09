@@ -192,10 +192,51 @@ export const toolSpecs: Record<ToolName, { description: string; parameters: Para
     },
     dota_kb: {
       description:
-        'Read local knowledge from Markdown and SQLite notes without MemOS or network access. Search ranks stable principles before stamped patch facts; a stamp is not independent verification. Get a note/section by id, or a relative Markdown path (optionally #section). Cite stamp, evidence refs and applicability before coaching. Write with dota_coach_note.',
+        'Read local knowledge from Markdown and SQLite notes without MemOS or network access. Search ranks stable principles before stamped patch facts; a stamp is not independent verification. Get a note/section by id, or a relative Markdown path (optionally #section). Cite stamp, evidence refs and applicability before coaching. Ontology is the persistent authority: create/revise/archive require source_record_id; writes are candidate only. Recall excludes candidates unless include_candidates=true; never treat them as verified. Search layer=ontology supports concept/relation/target and lifecycle filters. Legacy notes/MD remain readable. No active promotion API.',
       parameters: {
-        action: { ...enumeration('search', 'get', 'status', 'export'), required: true },
-        ids: { ...strings, description: 'Explicit note IDs selected for a public site snapshot. Required for export; never exports all notes.' },
+        action: {
+          ...enumeration(
+            'search',
+            'get',
+            'status',
+            'export',
+            'recall',
+            'create',
+            'update',
+            'revise',
+            'archive',
+          ),
+          required: true,
+        },
+        layer: enumeration('ontology'),
+        concept: string,
+        concepts: strings,
+        relation: string,
+        target: string,
+        relations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              relation: { ...enumeration('supports', 'contradicts'), required: true },
+              target: { ...string, required: true },
+            },
+          },
+        },
+        state: enumeration('candidate', 'active', 'superseded', 'archived'),
+        role: string,
+        phase: string,
+        include_candidates: { type: 'boolean' },
+        title: string,
+        body: string,
+        source_record_id: string,
+        reason: string,
+        ids: {
+          ...strings,
+          description:
+            'Explicit note IDs selected for a public site snapshot. Required for export; never exports all notes.',
+        },
         query: string,
         hero: string,
         patch: string,
