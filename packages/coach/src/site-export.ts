@@ -91,6 +91,13 @@ export function buildSiteSnapshot(
           'invalid_evidence',
           'Recheck or superseded knowledge cannot be published',
         )
+      // Legacy notes have no host-authorized curation path. Explicit IDs must not
+      // bypass the ontology promotion boundary for principles.
+      if (note.category === 'principle' && !ontology)
+        throw new CoachError(
+          'invalid_evidence',
+          'Principle export requires human curation through ontology promotion',
+        )
       const source = store.get(String(note.source_record_id), 'source')
       const source_url = sourceUrl(source)
       // Revalidate durable evidence on promotion, including edits made outside the tools.

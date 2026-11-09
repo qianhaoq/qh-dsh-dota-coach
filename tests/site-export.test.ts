@@ -14,8 +14,8 @@ function material(store: CoachStore, suffix = '', publicSource = true, sourceArg
   const source = store.source({ action:'import', source_id:'BV1xx411c7mD', title:'Public fixture',
     body:'A synthetic public transcript about checking objectives before moving.', locator:'12:30–12:45',
     material_type:publicSource?'transcript':'user_notes', origin:publicSource?'bilibili':'user_import', patch:'7.41f', ...sourceArgs }).record as RecordValue
-  return store.note({ kind:'principle', title:'Check the next objective'+suffix, body:'Look at the next objective before deciding to cross the river.'+suffix,
-    stamp:'[long-term · 2026-11-05 · BV1xx411c7mD]', source_id:source.source_id!, source_record_id:source.id!, hero:'', patch:'unknown' }).record as RecordValue
+  return store.note({ kind:'fact', title:'Check the next objective'+suffix, body:'Look at the next objective before deciding to cross the river.'+suffix,
+    stamp:'[long-term · 2026-11-05 · BV1xx411c7mD]', source_id:source.source_id!, source_record_id:source.id!, hero:'', patch:String(source.patch) }).record as RecordValue
 }
 
 test('public snapshot selects explicit knowledge only and preserves provenance across reopen', async t => {
@@ -59,6 +59,12 @@ test('export tool writes the versioned snapshot atomically and rejects implicit 
   assert.equal(result.ok,true,JSON.stringify(result))
   const text = await readFile(join(home,'export/site/knowledge.v1.json'),'utf8')
   assert.deepEqual(JSON.parse(text),result.snapshot)
+  const legacy = service.store.note({ kind: 'principle', title: 'QA legacy',
+    body: 'Check lane pressure before pulling.', patch: 'unknown',
+    source_record_id: note.source_record_id!, source_id: note.source_id!,
+    stamp: '[unknown · 2026-11-09 · BV1xx411c7mD]' }).record as RecordValue
+  assert.equal(legacy.needs_recheck, false)
+  assert.equal((await service.invoke('dota_kb', { action: 'export', ids: [legacy.id!] })).ok, false)
   assert.equal((await service.invoke('dota_kb',{action:'export'})).ok,false)
   assert.equal(await readFile(join(home,'export/site/knowledge.v1.json'),'utf8'),text)
 })
@@ -125,7 +131,7 @@ test('only the admitted Steam guide citation is retained; unknown facts still fa
   const store = new CoachStore(home)
   t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }) })
   const url = 'https://steamcommunity.com/sharedfiles/filedetails/?id=827490913'
-  const note = material(store, '', true, { source_id: 'steam-guide-827490913', locator: url, origin: 'forum', material_type: 'article', patch: 'unknown' })
+  const note = material(store, '', true, { source_id: 'steam-guide-827490913', locator: url, origin: 'forum', material_type: 'article', patch: '7.41f' })
   assert.equal((buildSiteSnapshot(store, [note.id]).entries as RecordValue[])[0].source_url, url)
   const source = store.get(String(note.source_record_id), 'source')
   const fact = store.note({ kind: 'fact', source_record_id: source.id!, source_id: source.source_id!, title: 'Unknown fixture', body: 'Unknown patch cannot be exported as a patch fact.', stamp: '[unknown · 2026-11-08 · steam-guide-827490913]', patch: 'unknown' }).record as RecordValue
@@ -144,6 +150,14 @@ test('human grant binds exact promotion payload; curated principle keeps unknown
     await rm(home, { recursive: true, force: true })
   })
   const note = material(store, '', true, { patch: 'unknown' })
+  const legacy = store.note({
+    kind: 'principle', title: 'Uncurated legacy principle',
+    body: 'Check lane pressure before pulling.', patch: 'unknown',
+    source_record_id: note.source_record_id!, source_id: note.source_id!,
+    stamp: '[unknown · 2026-11-09 · BV1xx411c7mD]',
+  }).record as RecordValue
+  assert.equal(legacy.needs_recheck, false)
+  assert.throws(() => buildSiteSnapshot(store, [legacy.id!]), /human curation/)
   const candidate = store.ontology.write({
     action: 'create',
     kind: 'principle',
