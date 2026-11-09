@@ -1,0 +1,47 @@
+{
+  "principle_id": "onto:claim:fab1e14f-3811-4b43-b6e2-84321cb1ada6",
+  "public_kb_id": "kb-04cd89756c8f746d6eb3eaf2",
+  "content_hash": "1c287e04cf6dcfb80e1f1cfb967fabfe80819543c238c63d918342528f20b810",
+  "curation": {
+    "reviewer": "钱浩（经 Grok Bot 消息 t317u「蒸馏」）",
+    "approval_ref": "t317u",
+    "decision": "approve_version_independent",
+    "rationale": "人类批准按修订短摘要晋升为版本无关原则；保留 Ace 署名、完美世界电竞转载原链及适用边界，不发布旧长正文，不钉死具体补丁。",
+    "reviewed_at": "2026-11-09T23:42:17+08:00",
+    "timezone": "Asia/Shanghai",
+    "candidate_id": "9914725e-53f6-4cef-bc01-bbcbb1ce16c4"
+  },
+  "final_state": "active",
+  "human_reviews": 1,
+  "promotions": 1,
+  "exports": 1,
+  "snapshot": {
+    "schema": "dota2.ai/site-knowledge@1",
+    "generated_at": "2026-11-09T15:42:17.603Z",
+    "entries": [
+      {
+        "id": "kb-04cd89756c8f746d6eb3eaf2",
+        "kind": "principle",
+        "title": "Ace：三号位对线外的14条短规则",
+        "summary": "路人三号位多半不是输在对线，而是赢线后10–20分钟把优势交回去。1开局先看辅助有无真眼再定出门装；2技能用来换血，控线≠憋技能；3兵线压过来时别硬反补；4走路接近买移速，跳脸买属性；5技能点可暂留关键时点；6也要打对面辅助那场架；7劣势线先保经验别送；8先冲翻盘节点（跳刀/6级/统御）；9赢线第一大件守地盘，输线尽快出能做事的装；10推塔后压对面发育；11半血不传送；12线上只露1秒；13针对性出装别固定三件套；14灵魂之戒英雄附魔优先活力。",
+        "hero": "",
+        "patch": "unknown",
+        "stamp": "[version-independent · historical author advice · wmpvp-news-305703]",
+        "source_url": "https://news.wmpvp.com/news.html?id=305703&gameTypeStr=1",
+        "source_date": "2026-11-09T15:42:17.527Z",
+        "content_hash": "1c287e04cf6dcfb80e1f1cfb967fabfe80819543c238c63d918342528f20b810",
+        "locator": "https://news.wmpvp.com/news.html?id=305703&gameTypeStr=1",
+        "verification": "material_linked_not_independently_verified",
+        "evidence_level": "post_body",
+        "completeness": "full",
+        "attribution": "Ace（Marcus Hoelgaard / Ace Dota 2）；完美世界电竞转载",
+        "applicability_scope": "version_independent",
+        "applicability_boundary": "历史作者建议；版本无关的局势判断原则。须按当前兵线、装备与团战条件判断，不构成具体补丁或具体对局的有效性验证。原视频见 YouTube Ace Dota 2《14 Offlane Tips That Win Games at Any MMR》。"
+      }
+    ]
+  },
+  "database": "/workspace/ace-curation-20261109/coach/evidence/ace-curation-run-1794238937507/coach.sqlite",
+  "source_url": "https://news.wmpvp.com/news.html?id=305703&gameTypeStr=1",
+  "youtube_reference": "https://www.youtube.com/watch?v=bPltAi7r0Qk",
+  "package_version_unchanged": "0.6.5"
+}
