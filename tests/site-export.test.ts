@@ -214,3 +214,93 @@ test('human grant binds exact promotion payload; curated principle keeps unknown
     snapshot,
   )
 })
+
+test('exact Ace wmpvp reprint is public provenance; siblings are refused', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-site-wmpvp-ace-'))
+  const store = new CoachStore(home)
+  t.after(async () => {
+    store.close()
+    await rm(home, { recursive: true, force: true })
+  })
+  const body =
+    'Ace offlane tips about holding advantages after the laning stage and converting towers into map control.'
+  const ok = store.source({
+    action: 'import',
+    source_id: 'wmpvp-news-305703',
+    title: '来自Ace的14个三号位小技巧',
+    body,
+    locator: 'https://news.wmpvp.com/news.html?id=305703&gameTypeStr=1&utm=drop',
+    material_type: 'article',
+    origin: 'forum',
+    patch: 'unknown',
+    evidence_level: 'post_body',
+    completeness: 'full',
+  }).record as RecordValue
+  const note = store.note({
+    kind: 'fact',
+    title: 'fixture ace note',
+    body: 'Hold the offlane advantage after the tower falls.',
+    stamp: '[unknown · 2026-11-09 · wmpvp-news-305703]',
+    source_id: ok.source_id!,
+    source_record_id: ok.id!,
+    patch: 'unknown',
+  }).record as RecordValue
+  // Facts with unknown patch cannot export; promote a principle instead for URL proof.
+  const candidate = store.ontology.write({
+    action: 'create',
+    kind: 'principle',
+    title: 'Ace fixture',
+    body: 'Hold the offlane advantage after the tower falls.',
+    source_record_id: ok.id!,
+    patch: 'unknown',
+    role: 'offlane',
+  }).record as RecordValue
+  const approval: RecordValue = {
+    action: 'promote',
+    id: candidate.id!,
+    curation: {
+      reviewer: 'Fixture curator',
+      approval_ref: 'fixture ace',
+      decision: 'approve_version_independent',
+      rationale: 'Synthetic explicit approval for Ace URL fixture',
+      reviewed_at: '2026-11-09T23:40:00+08:00',
+      timezone: 'Asia/Shanghai',
+      candidate_id: note.id!,
+    },
+    attribution: 'Ace fixture',
+    applicability_boundary: 'Historical advice; assess the current situation.',
+  }
+  store.ontology.authorizePromotion(approval)
+  store.ontology.promote(approval)
+  const entry = (buildSiteSnapshot(store, [candidate.id!]).entries as RecordValue[])[0]!
+  assert.equal(entry.source_url, 'https://news.wmpvp.com/news.html?id=305703&gameTypeStr=1')
+  assert.equal(entry.patch, 'unknown')
+  for (const [source_id, locator] of [
+    ['wmpvp-bad-id', 'https://news.wmpvp.com/news.html?id=305704&gameTypeStr=1'],
+    ['wmpvp-bad-game', 'https://news.wmpvp.com/news.html?id=305703&gameTypeStr=2'],
+    ['wmpvp-bad-path', 'https://news.wmpvp.com/other.html?id=305703&gameTypeStr=1'],
+  ] as const) {
+    const bad = store.source({
+      action: 'import',
+      source_id,
+      title: 'bad',
+      body,
+      locator,
+      material_type: 'article',
+      origin: 'forum',
+      patch: '7.41f',
+      evidence_level: 'post_body',
+      completeness: 'full',
+    }).record as RecordValue
+    const badNote = store.note({
+      kind: 'fact',
+      title: 'bad',
+      body: 'bad body for refusal of unsupported wmpvp routes',
+      stamp: `[7.41f · 2026-11-09 · ${source_id}]`,
+      source_id: bad.source_id!,
+      source_record_id: bad.id!,
+      patch: '7.41f',
+    }).record as RecordValue
+    assert.throws(() => buildSiteSnapshot(store, [badNote.id!]), /public resource/)
+  }
+})

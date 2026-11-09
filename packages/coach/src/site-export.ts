@@ -5,11 +5,16 @@ import type { CoachStore } from './store.ts'
 import type { RecordValue } from './types.ts'
 
 const selection = z.array(z.string().trim().min(1)).min(1).max(100)
-const publicHosts = new Set(['bilibili.com', 'www.bilibili.com', 'youtube.com', 'www.youtube.com', 'youtu.be', 'reddit.com', 'www.reddit.com', 'old.reddit.com', 'dota2.com', 'www.dota2.com', 'steamcommunity.com'])
+const publicHosts = new Set(['bilibili.com', 'www.bilibili.com', 'youtube.com', 'www.youtube.com', 'youtu.be', 'reddit.com', 'www.reddit.com', 'old.reddit.com', 'dota2.com', 'www.dota2.com', 'steamcommunity.com', 'news.wmpvp.com', 'www.news.wmpvp.com'])
 
 function publicResource(url: URL): string | null {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || !publicHosts.has(url.hostname)) return null
   if (url.hostname === 'steamcommunity.com') return url.href === 'https://steamcommunity.com/sharedfiles/filedetails/?id=827490913' ? 'steam-guide-827490913' : null
+  if (url.hostname === 'news.wmpvp.com' || url.hostname === 'www.news.wmpvp.com') {
+    return url.pathname === '/news.html' && url.searchParams.get('id') === '305703' && url.searchParams.get('gameTypeStr') === '1'
+      ? 'wmpvp-news-305703'
+      : null
+  }
   if (url.hostname.endsWith('bilibili.com')) return /^\/video\/(BV[A-Za-z0-9]{10})\/?$/.exec(url.pathname)?.[1] ?? null
   if (url.hostname === 'youtu.be') return /^\/([A-Za-z0-9_-]{11})\/?$/.exec(url.pathname)?.[1] ?? null
   if (url.hostname.endsWith('youtube.com')) {
@@ -49,9 +54,15 @@ function sourceUrl(source: RecordValue): string {
   const start = (located ?? url).searchParams.get('start')
   const part = (located ?? url).searchParams.get('p')
   const steamGuide = url.hostname === 'steamcommunity.com'
+  const wmpvpAce = url.hostname === 'news.wmpvp.com' || url.hostname === 'www.news.wmpvp.com'
   url.search = ''
   url.hash = ''
   if (steamGuide) url.searchParams.set('id', '827490913')
+  if (wmpvpAce) {
+    url.hostname = 'news.wmpvp.com'
+    url.searchParams.set('id', '305703')
+    url.searchParams.set('gameTypeStr', '1')
+  }
   if (['youtube.com', 'www.youtube.com'].includes(url.hostname) && video && /^[A-Za-z0-9_-]{11}$/.test(video)) url.searchParams.set('v', video)
   if (time && /^\d{1,7}s?$/.test(time)) url.searchParams.set('t', time)
   if (url.hostname.endsWith('youtube.com') && start && /^\d{1,7}$/.test(start)) url.searchParams.set('start', start)

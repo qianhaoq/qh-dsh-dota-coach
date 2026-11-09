@@ -41,3 +41,24 @@ node --import ./coach/node_modules/tsx/dist/loader.mjs evidence/curation-demo.mt
 ## 仍未完成
 
 三局有效性仍 FAIL/incomplete；完整架构部署、公开 agent endpoint、自动历史回填、向量检索未做。dsh 产品 pin 保持唯一 0.2.1-rc.3。未读凭证、未部署、未合入、未添加 qa-passed、未碰 #115。两个既有 PR 保持 draft + no-auto-merge；远端 CI 状态不伪称通过。
+
+# t317u Ace 三号位策展闭环
+
+钱浩经 Grok Bot 消息 t317u「蒸馏」批准，将完美世界电竞转载的 Ace《来自Ace的14个三号位小技巧》晋升为版本无关 principle。未伪造新的人类评审；未运行新模型蒸馏改写要点以外的正文。
+
+## 策展及持久化
+
+导入公开源 `wmpvp-news-305703`（原文 API：appactivity getAppNewsById），创建 legacy note + ontology candidate，再由宿主 `authorizePromotion` + `dota_kb promote` 晋升。decision=`approve_version_independent`；timezone=`Asia/Shanghai`；approval_ref=`t317u`。记录见 `docs/curation-t317u.json` 与 `evidence/ace-curation-demo-summary.json`。
+
+公开摘要锁定为 14 条短规则压缩版（≤1000 字），署名 `Ace（Marcus Hoelgaard / Ace Dota 2）；完美世界电竞转载`，原链 `https://news.wmpvp.com/news.html?id=305703&gameTypeStr=1`。适用边界标明须按当前局势判断，并引用 YouTube 原视频 `https://www.youtube.com/watch?v=bPltAi7r0Qk` 作对照，不钉死 7.41f。
+
+## 导出边界
+
+`site-export` 仅放行这一条 wmpvp 新闻资源（`wmpvp-news-305703`），与 Steam 指南同款单点 allowlist。公开条目 `kb-04cd89756c8f746d6eb3eaf2`，patch=`unknown`，applicability_scope=`version_independent`。未策展 legacy principle 仍拒导出。
+
+## 验证
+
+`evidence/ace-curation-demo.mts`：未授权 promote 失败；授权后 active；recall「三号位 / Ace / 赢线后」在 unknown/7.41f/60 下均命中且 applicability=`version_independent`；export 无 reviewer/内部 id/7.41f。`tests/site-export.test.ts` 覆盖正例与错误 id/gameType/path 拒绝。
+
+三局有效性仍 FAIL/incomplete；包版本仍 0.6.5；dsh pin 仍 0.2.1-rc.3。
+
