@@ -1,0 +1,45 @@
+{
+  "original_candidate": "6672ed86-7b16-4988-8f77-d914fd3f56bc",
+  "original_unchanged": true,
+  "principle_id": "onto:claim:3ebd6e22-c0e9-4a72-8173-eb13e6e88d54",
+  "curation": {
+    "reviewer": "钱浩（经 Grok Bot 卡片 t284s1445）",
+    "approval_ref": "t284s1445",
+    "decision": "approve_version_independent",
+    "rationale": "人类批准按修订短摘要晋升为版本无关原则；保留历史作者建议、署名、原链接及当前适用边界，不发布旧长正文或旧数值。",
+    "reviewed_at": "2026-11-09T09:19:05+08:00",
+    "timezone": "Asia/Shanghai",
+    "candidate_id": "6672ed86-7b16-4988-8f77-d914fd3f56bc"
+  },
+  "final_state": "active",
+  "human_reviews": 1,
+  "promotions": 1,
+  "exports": 1,
+  "snapshot": {
+    "schema": "dota2.ai/site-knowledge@1",
+    "generated_at": "2026-11-09T01:19:05.566Z",
+    "entries": [
+      {
+        "id": "kb-028d66b81456e3720aaea63a",
+        "kind": "principle",
+        "title": "辅助拉野前的局势检查",
+        "summary": "拉野前检查兵线、营地、双方位置、核心安全、塔压与敌方视野，并与队友协调；敌兵已进己塔时，先重新评估是否应离线拉野。",
+        "hero": "",
+        "patch": "unknown",
+        "stamp": "[version-independent · historical author advice · steam-guide-827490913]",
+        "source_url": "https://steamcommunity.com/sharedfiles/filedetails/?id=827490913",
+        "source_date": "2026-11-08T16:01:31.672Z",
+        "content_hash": "139b1984312d1d0711ec320baa94f5a7897eb7ba4d7a62e9e2398832468bb691",
+        "locator": "https://steamcommunity.com/sharedfiles/filedetails/?id=827490913",
+        "verification": "material_linked_not_independently_verified",
+        "evidence_level": "post_body",
+        "completeness": "full",
+        "attribution": "✪还能一起看海吗；hong yu（Steam Community）",
+        "applicability_scope": "version_independent",
+        "applicability_boundary": "历史作者建议；版本无关的局势检查原则。须按当前兵线、营地与安全条件判断，不构成具体补丁或具体对局的有效性验证。"
+      }
+    ]
+  },
+  "three_match_effectiveness": "FAIL/incomplete",
+  "execution_evidence": "evidence/curation-demo-summary.json and curation-run-*/trace.json in author workspace"
+}

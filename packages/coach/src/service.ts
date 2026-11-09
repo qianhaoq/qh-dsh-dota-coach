@@ -249,15 +249,35 @@ export class CoachService {
         const snapshot = buildSiteSnapshot(this.store, a.ids)
         const dir = join(this.home, 'export', 'site')
         await mkdir(dir, { recursive: true, mode: 0o700 })
-        const path = join(dir, 'knowledge.v1.json'), temporary = `${path}.${randomUUID()}.tmp`
+        const path = join(dir, 'knowledge.v1.json'),
+          temporary = `${path}.${randomUUID()}.tmp`
         await writeFile(temporary, JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 })
         await rename(temporary, path)
         return { ok: true, export_path: path, snapshot }
       }
-      if (a.action === 'search') return this.store.kbSearch(a)
+      if (a.action === 'promote') return this.store.ontology.promote(a)
+      if (['create', 'revise', 'update', 'archive'].includes(String(a.action)))
+        return this.store.ontology.write(a)
+      if (a.action === 'recall') return this.store.ontology.search(a, true)
+      if (a.action === 'search') {
+        if (a.layer === 'ontology' || !a.query || a.concept || a.relation || a.state)
+          return this.store.ontology.search(a)
+        const legacy = this.store.kbSearch(a)
+        const ontology = this.store.ontology.search(a)
+        return {
+          ...legacy,
+          items: [...(ontology.items as RecordValue[]), ...(legacy.items as RecordValue[])].slice(
+            0,
+            Number(a.limit) || 10,
+          ),
+        }
+      }
       if (a.action === 'get') return this.store.kbGet(a)
       if (a.action === 'status') return this.store.kbStatus()
-      throw new CoachError('invalid_arguments', 'Use search/get/status/export for dota_kb')
+      throw new CoachError(
+        'invalid_arguments',
+        'Use search/get/status/recall/create/revise/archive/export for dota_kb',
+      )
     }
     if (name === 'dota_source')
       return a.action === 'search' ? this.searchSources(a, signal, exec) : a.action === 'fetch' ? this.fetchSource(a, signal, exec) : this.store.source(a)
@@ -685,7 +705,7 @@ export class CoachService {
     return json({ ok: true, evidence_level: 'discovery_only', provider_tool: provider, content: outcome.content })
   }
   private providers(): string[] {
-    return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json'].filter(
+    return ['bili_subtitle', 'yt_subtitle', 'forum_fetch', 'reddit_json', 'official_patch_json', 'steam_support_guide'].filter(
       (t) => !!this.ctx.tools.get(t),
     )
   }
@@ -740,10 +760,11 @@ export class CoachService {
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error
     }
-    if (
-      payload.ok === false ||
-      ['title_only', 'comments_only'].includes(String(payload.evidence_level))
-    )
+    if (payload.ok === false)
+      throw new CoachError('source_fetch_failed', 'Public source provider returned no usable material', {
+        reason: String(payload.reason || 'provider_unavailable'),
+      })
+    if (['title_only', 'comments_only'].includes(String(payload.evidence_level)))
       throw new CoachError('source_body_missing', 'Provider did not return source body evidence')
     const post = raw(payload.post)
     const body =
@@ -765,6 +786,9 @@ export class CoachService {
         'source_body_missing',
         'Provider returned no full readable body; import its transcript text',
       )
+    if (payload.url && a.locator && /^https?:/i.test(String(a.locator)) &&
+        new URL(String(a.locator)).pathname.replace(/\/$/, '') !== new URL(String(payload.url)).pathname.replace(/\/$/, ''))
+      throw new CoachError('invalid_evidence', 'Provider URL does not match the requested locator')
     const sourceId = String(
       payload.source_id || a.source_id || (payload.bvid ? String(payload.bvid) : ''),
     )
@@ -784,9 +808,16 @@ export class CoachService {
           `returned transcript · ${payload.language || payload.lang || 'language unknown'}`,
       ),
       body,
+      patch: typeof payload.patch === 'string' ? payload.patch : 'unknown',
+      evidence_level: provider.endsWith('subtitle') ? 'subtitle_full' : 'post_body',
+      retrieval: payload.retrieval || null,
+      published_at: payload.published_at || null,
+      ...(typeof payload.captured_at === 'string' ? { captured_at: payload.captured_at } : {}),
       material_type: provider.endsWith('subtitle') ? 'transcript' : 'article',
-      completeness: payload.truncated ? 'excerpt' : 'unknown',
-      origin: provider.startsWith('bili')
+      completeness: payload.truncated ? 'excerpt' : payload.completeness === 'full' ? 'full' : 'unknown',
+      origin: provider === 'official_patch_json'
+        ? 'official'
+        : provider.startsWith('bili')
         ? 'bilibili'
         : provider.startsWith('yt')
           ? 'youtube'

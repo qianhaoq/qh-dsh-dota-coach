@@ -16,7 +16,7 @@ execFileSync(
   },
 )
 await build({
-  entryPoints: [root + '/src/index.ts', root + '/src/memory-worker.ts'],
+  entryPoints: [root + '/src/index.ts', root + '/src/memory-worker.ts', root + '/src/public-source.ts'],
   outdir: root + '/lib',
   platform: 'node',
   target: 'node24',

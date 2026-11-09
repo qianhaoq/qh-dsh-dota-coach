@@ -45,3 +45,13 @@ MemOS 2.0.21 的旧 DSH 适配器仍声明较旧的 peer 范围。本插件使�
 DSH Typert 生成器按工作区包识别协议符号。构建把已安装公开协议声明原样暂存为工作区输入，再使用官方 Analyzer 和 Emitter 生成 Host/Remote。临时声明不修改 SDK，也不进入发布物。客户端工厂按 `window.__ModuleLoader__.load` 格式构建，React 和客户端 store 使用宿主提供的实例。
 
 项目不修改 `dota2.ai`，不发布 npm/插件市场，不增加云同步或定时自动学习。
+
+## 本体论 KB 持久权威层（t284u）
+
+`ontology_nodes` 保存 Concept、Principle、FactClaim、SourceMaterial、Hero、Patch、PhaseSituation、EvidenceLink 正文；`ontology_edges` 保存 about_concept/about_hero/applies_to_patch/in_phase/derived_from_source/supersedes/supports/contradicts。`ontology_events` 追加保存创建、替代、归档快照。三表构成本体论 KB 的持久权威层；`ontology_search` 是重启可重建的 FTS 投影，不替代正文，MemOS 仍仅是候选经验层。旧 MD/note 保留为兼容读取面，未自动认证或晋升。
+
+`dota_kb create` 接收 kind/title/body/source_record_id/patch/hero/role/phase/concepts；一律 candidate，自动从来源生成 stamp 与 provenance，显式精确匹配来源 patch，unknown 不升级。`revise`（或 update）必须重新给 source_record_id，新 ID 与旧节点 supersedes/replaced_by 相连，旧节点变 superseded；`archive` 要求 id/source_record_id/reason，正文和事件保留。关系写入可用 relations=[{relation: supports|contradicts,target: 本体ID}]；工具检索可按 relation/target 读取。所有写入事务化；无 active 晋升接口，不伪造人类签字。
+
+`search layer=ontology` 支持 query/concept/relation/target/hero/patch/kind/state；get 按 onto: ID 返回正文、边及事件历史，status 返回本体状态计数。`recall` 支持 hero/patch/role/phase/query；默认只召回 active 原则/事实，显式 include_candidates=true 才可查看候选，且候选始终非验证事实。未知版本不匹配具体 patch，历史/归档/被替代节点不参与召回。未提供版本时 applicability=unknown。比赛上下文须先由 dota_match 得到，再传入工具，不猜测版本后缀。
+
+迁移使用 CREATE IF NOT EXISTS 和 ontology-v1 标记，重复打开不复制节点、不修改 MD/note。修订及归档事件与正文/关系在同一 SQLite 事务提交；旧数据不会自动变成 active 本体。当前 exporter 仅选旧 note ID，onto: 节点不能导出；候选晋升须另行完成真实人类策展协议再实现导出桥。薄站 schema 与公网边界不变。

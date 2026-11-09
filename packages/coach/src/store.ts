@@ -1,3 +1,4 @@
+import { OntologyKB } from './ontology.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import {
@@ -20,10 +21,14 @@ const sourceInput = z.object({
   body: text.max(2_000_000),
   locator: text,
   material_type: z.enum(['transcript', 'article', 'user_notes', 'comment']).default('user_notes'),
-  origin: z.enum(['user_import', 'bilibili', 'youtube', 'forum', 'match']).default('user_import'),
+  origin: z.enum(['user_import', 'bilibili', 'youtube', 'forum', 'official', 'match']).default('user_import'),
   patch: z.string().default('unknown'),
   hero: z.string().default(''),
   tags: z.array(z.string()).default([]),
+  evidence_level: z.enum(['subtitle_full', 'frames_checked', 'title_only', 'post_body', 'comments_only']).optional(),
+  retrieval: z.object({ method: text, url: text, response_hash: z.string().regex(/^[a-f0-9]{64}$/), section_count: z.number().int().positive().optional(), attribution: text.optional(), permission: text.optional() }).nullable().optional(),
+  published_at: z.iso.datetime().nullable().optional(),
+  captured_at: z.iso.datetime().optional(),
   completeness: z.enum(['full', 'excerpt', 'unknown']).default('unknown'),
 })
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
@@ -33,6 +38,7 @@ const stampPattern = /\[([^\]\n·]+)·([^\]\n·]+)·([^\]\n·]+)\]/
 /** Synchronous transactions serialize writes in one Host; WAL/busy_timeout cover other processes. */
 export class CoachStore {
   readonly db: DatabaseSync
+  readonly ontology: OntologyKB
   constructor(readonly home: string) {
     mkdirSync(home, { recursive: true, mode: 0o700 })
     this.ensurePatchScaffold()
@@ -48,6 +54,7 @@ export class CoachStore {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,kind UNINDEXED,body,tokenize='trigram');
       PRAGMA user_version=2; COMMIT;`)
+    this.ontology = new OntologyKB(this)
     this.transaction(() => {
       if (!this.kbFtsReady() || this.db.prepare('SELECT 1 FROM search LIMIT 1').get()) return
       const remove = this.db.prepare('DELETE FROM search WHERE id=?'),
@@ -80,6 +87,7 @@ export class CoachStore {
     return {
       ok: true,
       home: this.home,
+      ontology: this.ontology.status(),
       paths: {
         database: join(this.home, 'coach.sqlite'),
         principles: join(this.home, 'principles.md'),
@@ -319,6 +327,11 @@ export class CoachStore {
     return { ok: true, items: hits.slice(0, input.limit) }
   }
   kbGet(args: RecordValue): RecordValue {
+    if (String(args.id || '').startsWith('onto:')) {
+      if (args.path) throw new CoachError('invalid_arguments', 'Provide exactly one of id or path')
+      const node = this.ontology.get(String(args.id))
+      return { ok: true, record: { ...node, applicability: node.applicability_scope === 'version_independent' ? 'version_independent' : !args.current_patch || node.patch === 'unknown' ? 'unknown' : node.patch === args.current_patch ? 'exact' : 'outdated' } }
+    }
     const input = z
       .object({
         id: text.optional(),
@@ -463,7 +476,7 @@ export class CoachStore {
       const row = this.put('source', {
         ...input,
         content_hash,
-        captured_at: now(),
+        captured_at: input.captured_at || now(),
         evidence_status: 'readable_material',
       })
       this.db.prepare('INSERT INTO dedupe VALUES(?,?)').run(key, String(row.id))

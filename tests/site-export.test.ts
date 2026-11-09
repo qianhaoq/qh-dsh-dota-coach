@@ -14,8 +14,8 @@ function material(store: CoachStore, suffix = '', publicSource = true, sourceArg
   const source = store.source({ action:'import', source_id:'BV1xx411c7mD', title:'Public fixture',
     body:'A synthetic public transcript about checking objectives before moving.', locator:'12:30–12:45',
     material_type:publicSource?'transcript':'user_notes', origin:publicSource?'bilibili':'user_import', patch:'7.41f', ...sourceArgs }).record as RecordValue
-  return store.note({ kind:'principle', title:'Check the next objective'+suffix, body:'Look at the next objective before deciding to cross the river.'+suffix,
-    stamp:'[long-term · 2026-11-05 · BV1xx411c7mD]', source_id:source.source_id!, source_record_id:source.id!, hero:'', patch:'unknown' }).record as RecordValue
+  return store.note({ kind:'fact', title:'Check the next objective'+suffix, body:'Look at the next objective before deciding to cross the river.'+suffix,
+    stamp:'[long-term · 2026-11-05 · BV1xx411c7mD]', source_id:source.source_id!, source_record_id:source.id!, hero:'', patch:String(source.patch) }).record as RecordValue
 }
 
 test('public snapshot selects explicit knowledge only and preserves provenance across reopen', async t => {
@@ -59,6 +59,12 @@ test('export tool writes the versioned snapshot atomically and rejects implicit 
   assert.equal(result.ok,true,JSON.stringify(result))
   const text = await readFile(join(home,'export/site/knowledge.v1.json'),'utf8')
   assert.deepEqual(JSON.parse(text),result.snapshot)
+  const legacy = service.store.note({ kind: 'principle', title: 'QA legacy',
+    body: 'Check lane pressure before pulling.', patch: 'unknown',
+    source_record_id: note.source_record_id!, source_id: note.source_id!,
+    stamp: '[unknown · 2026-11-09 · BV1xx411c7mD]' }).record as RecordValue
+  assert.equal(legacy.needs_recheck, false)
+  assert.equal((await service.invoke('dota_kb', { action: 'export', ids: [legacy.id!] })).ok, false)
   assert.equal((await service.invoke('dota_kb',{action:'export'})).ok,false)
   assert.equal(await readFile(join(home,'export/site/knowledge.v1.json'),'utf8'),text)
 })
@@ -90,4 +96,121 @@ test('private/account routes and mismatched video locators are not public proven
   assert.throws(()=>buildSiteSnapshot(store,[wrong.id]),/same supported public resource/)
   const post = material(store,'public post',true,{source_id:'public-post',origin:'forum',material_type:'article',locator:'https://www.reddit.com/r/DotA2/comments/abc123/public_post/?token=private'})
   assert.equal((buildSiteSnapshot(store,[post.id]).entries as RecordValue[])[0]!.source_url,'https://www.reddit.com/r/DotA2/comments/abc123/public_post/')
+})
+
+test('promotion rehashes durable bodies and refuses excerpt or mismatched patch facts', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-site-integrity-'))
+  const store = new CoachStore(home)
+  t.after(async () => {
+    store.close()
+    await rm(home, { recursive: true, force: true })
+  })
+  const note = material(store)
+  const source = store.get(String(note.source_record_id), 'source')
+  const mutate = (row: RecordValue) =>
+    store.db
+      .prepare('UPDATE records SET data=? WHERE id=?')
+      .run(JSON.stringify(row), String(row.id))
+  mutate({
+    ...source,
+    body: 'Tampered text which must never be exported as the original material.',
+  })
+  assert.throws(() => buildSiteSnapshot(store, [note.id]), /hash/)
+  mutate({ ...source, completeness: 'excerpt' })
+  assert.throws(() => buildSiteSnapshot(store, [note.id]), /completeness/)
+  mutate(source)
+  mutate({ ...note, category: 'fact', patch: '7.41' })
+  assert.throws(() => buildSiteSnapshot(store, [note.id]), /exact source patch/)
+  mutate({ ...note, category: 'fact', patch: '7.41f' })
+  assert.equal((buildSiteSnapshot(store, [note.id]).entries as RecordValue[])[0]!.patch, '7.41f')
+  assert.equal(store.kbGet({ id: note.id!, current_patch: '7.41' }).record !== undefined, true)
+})
+
+test('only the admitted Steam guide citation is retained; unknown facts still fail promotion', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-steam-export-'))
+  const store = new CoachStore(home)
+  t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }) })
+  const url = 'https://steamcommunity.com/sharedfiles/filedetails/?id=827490913'
+  const note = material(store, '', true, { source_id: 'steam-guide-827490913', locator: url, origin: 'forum', material_type: 'article', patch: '7.41f' })
+  assert.equal((buildSiteSnapshot(store, [note.id]).entries as RecordValue[])[0].source_url, url)
+  const source = store.get(String(note.source_record_id), 'source')
+  const fact = store.note({ kind: 'fact', source_record_id: source.id!, source_id: source.source_id!, title: 'Unknown fixture', body: 'Unknown patch cannot be exported as a patch fact.', stamp: '[unknown · 2026-11-08 · steam-guide-827490913]', patch: 'unknown' }).record as RecordValue
+  assert.throws(() => buildSiteSnapshot(store, [fact.id]), /exact source patch/)
+  for (const locator of [url + '&x=1', url.replace('827490913', '1'), url + '#fragment']) {
+    const unsafe = material(store, locator, true, { source_id: 'steam-guide-827490913', locator, origin: 'forum', material_type: 'article' })
+    assert.throws(() => buildSiteSnapshot(store, [unsafe.id]), /public resource/)
+  }
+})
+
+test('human grant binds exact promotion payload; curated principle keeps unknown provenance and durable history', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'coach-curation-'))
+  let store = new CoachStore(home)
+  t.after(async () => {
+    store.close()
+    await rm(home, { recursive: true, force: true })
+  })
+  const note = material(store, '', true, { patch: 'unknown' })
+  const legacy = store.note({
+    kind: 'principle', title: 'Uncurated legacy principle',
+    body: 'Check lane pressure before pulling.', patch: 'unknown',
+    source_record_id: note.source_record_id!, source_id: note.source_id!,
+    stamp: '[unknown · 2026-11-09 · BV1xx411c7mD]',
+  }).record as RecordValue
+  assert.equal(legacy.needs_recheck, false)
+  assert.throws(() => buildSiteSnapshot(store, [legacy.id!]), /human curation/)
+  const candidate = store.ontology.write({
+    action: 'create',
+    kind: 'principle',
+    title: 'Conditional movement',
+    body: 'Check lane safety first.',
+    source_record_id: note.source_record_id!,
+    patch: 'unknown',
+    role: 'support',
+    phase: 'lane',
+  }).record as RecordValue
+  const approval: RecordValue = {
+    action: 'promote',
+    id: candidate.id!,
+    curation: {
+      reviewer: 'Fixture curator',
+      approval_ref: 'fixture approval',
+      decision: 'approve_version_independent',
+      rationale: 'Synthetic explicit approval',
+      reviewed_at: '2026-11-09T09:00:00+08:00',
+      timezone: 'Asia/Shanghai',
+      candidate_id: note.id!,
+    },
+    attribution: 'Fixture author',
+    applicability_boundary: 'Historical advice; assess the current situation.',
+  }
+  assert.throws(() => store.ontology.promote(approval), /authorization/)
+  store.ontology.authorizePromotion(approval)
+  assert.throws(
+    () => store.ontology.promote({ ...approval, attribution: 'Changed author' }),
+    /authorization/,
+  )
+  store.ontology.promote(approval)
+  assert.throws(() => store.ontology.promote(approval), /candidate principle/)
+  const snapshot = buildSiteSnapshot(store, [candidate.id!])
+  const entry = (snapshot.entries as RecordValue[])[0]
+  assert.equal(entry.patch, 'unknown')
+  assert.equal(entry.applicability_scope, 'version_independent')
+  assert.equal(entry.attribution, 'Fixture author')
+  assert.ok(!JSON.stringify(snapshot).includes('Fixture curator'))
+  for (const patch of ['7.41f', 'unknown', '60']) {
+    const hits = store.ontology.search({ patch, role: 'support', phase: 'lane' }, true)
+      .items as RecordValue[]
+    assert.equal(hits.length, 1)
+    assert.equal(hits[0].applicability, 'version_independent')
+  }
+  assert.equal((store.ontology.search({ phase: 'late' }, true).items as RecordValue[]).length, 0)
+  store.close()
+  store = new CoachStore(home)
+  assert.equal(store.ontology.get(String(candidate.id)).state, 'active')
+  const history = store.ontology.get(String(candidate.id)).history as RecordValue[]
+  assert.equal(history.at(-1)?.action, 'human_curated_promotion')
+  assert.deepEqual(
+    buildSiteSnapshot(store, [candidate.id!], String(snapshot.generated_at)),
+    snapshot,
+  )
 })
