@@ -17,3 +17,21 @@ Local storage and multilingual embeddings use MemOS Local's public core. First s
 中文说明、English guide、源码、配置与验证：[project repository](https://github.com/qianhaoq/qh-dsh-dota-coach)。
 
 MIT © Hao Qian. Dependencies retain their own terms; see NOTICE.
+
+### Native replay economy facts
+
+`dota-extract` writes `trace/events.jsonl` with hero-involved combat events,
+plus buyback, purchase, gold, XP, player stats, team building kills, and first
+blood even when both hero flags are false. Creep-only damage remains filtered.
+`attacker`, `target`, `inflictor`, and `value_name` resolve CombatLogNames;
+for purchases, `target` is the buyer and `value_name` is the item. Numeric
+`value` is preserved. Optional economy/building fields retain null when absent.
+Event `t` remains combat timestamp minus game start time; negative pre-game
+purchase times are valid. Missing death coordinates remain null.
+
+`trace/metadata.jsonl` contains demo match metadata from each metadata callback,
+with an explicit player-field allowlist (no Steam IDs, names, private metadata,
+or cosmetics). It includes team/slot identifiers, net worth graph values,
+camps stacked, item purchases, and inventory stat snapshots. These graphs and
+snapshots are metadata observations, not combat-log exact times; their native
+purchase/game times are preserved without applying the event clock formula.

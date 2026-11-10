@@ -164,6 +164,14 @@ func run(args []string) (err error) {
 		return err
 	}
 	defer wardOutput.Close()
+	metadata, err := os.Create(filepath.Join(trace, "metadata.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer metadata.Close()
+	p.Callbacks.OnCDOTAMatchMetadataFile(func(m *dota.CDOTAMatchMetadataFile) error {
+		return encode(metadata, matchMetadataRow(m))
+	})
 	tactical := registerTactical(p, states, events, wardOutput, encode)
 	entities := map[string]*manta.Entity{}
 	wards := map[string]Row{}
