@@ -38,6 +38,9 @@ func TestDecodeAtomicLimitAndFormats(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if name == "dem" && meta["format"] != "raw" {
+				t.Fatalf("raw demo format = %v", meta["format"])
+			}
 			if name != "dem" && meta["format"] != "zstd" {
 				t.Fatal(meta)
 			}

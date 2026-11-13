@@ -405,7 +405,7 @@ func decode(src, out string, max int64) (string, Row, error) {
 		return "", nil, e
 	}
 	var input io.Reader = r
-	format := "dem"
+	format := "raw"
 	switch {
 	case string(magic[:3]) == "BZh":
 		input = bzip2.NewReader(r)
