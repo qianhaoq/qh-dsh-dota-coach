@@ -36,7 +36,8 @@ The output includes `dota-extract.sha256` and `build-source.txt`. Verify both
 against the reviewed pin before supplying the binary as the site's
 `Dockerfile.replay-worker` `EXTRACTOR_PATH` build argument. Store the source
 commit and binary SHA separately from the eventual container image digest.
-Changing Go, dependencies, flags or source requires a fresh measured SHA and
+The build script refuses a dirty extractor source tree so `source_commit` cannot
+label a modified working copy as a clean HEAD. Changing Go, dependencies, flags or source requires a fresh measured SHA and
 contract tests; never silently replace a pinned binary.
 
 Uncompressed input is reported as `format: raw`, aligned with the site enum.
