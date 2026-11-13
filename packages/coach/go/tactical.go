@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const tacticalVersion = 3
+const tacticalVersion = 4
 
 var camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
 
@@ -121,7 +121,7 @@ func handles(p *manta.Parser, e *manta.Entity, prefix string, count int) []Row {
 }
 
 // Visibility observations are valid at the event instant, never continuous vision.
-func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, encode func(io.Writer, Row) error) *Row {
+func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, encode func(io.Writer, Row) error, current *matchClock) *Row {
 	summary := Row{"version": tacticalVersion, "clock": "server_tick_pause_adjusted", "sample_seconds": 0.25, "visibility": "event_observations_or_entity_mask; unknown_between_observations", "cooldown_semantics": "remaining_seconds", "states": 0, "events": 0}
 	var rules, resource *manta.Entity
 	heroes := map[string]*manta.Entity{}
@@ -133,21 +133,24 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 	p.Callbacks.OnCSVCMsg_ServerInfo(func(m *dota.CSVCMsg_ServerInfo) error {
 		if m.GetTickInterval() > 0 {
 			interval = float64(m.GetTickInterval())
+			current.interval = interval
 		}
 		return nil
 	})
-	p.Callbacks.OnCNETMsg_Tick(func(m *dota.CNETMsg_Tick) error { tick = m.GetTick(); return nil })
+	p.Callbacks.OnCNETMsg_Tick(func(m *dota.CNETMsg_Tick) error { tick = m.GetTick(); current.tick = tick; return nil })
 	p.OnEntity(func(e *manta.Entity, op manta.EntityOp) error {
 		name := e.GetClassName()
 		if strings.Contains(strings.ToLower(name), "gamerules") {
 			rules = e
+			current.rules = e
+			current.now()
 		}
 		if strings.Contains(name, "PlayerResource") {
 			resource = e
 		}
 		if name == "CDOTA_NPC_Observer_Ward" || name == "CDOTA_NPC_Observer_Ward_TrueSight" {
 			id := fmt.Sprintf("%d:%d", e.GetIndex(), e.GetSerial())
-			gt, clockKnown := gameClock(tick, interval, rules)
+			gt, clockKnown := current.now()
 			if op.Flag(manta.EntityOpDeleted) {
 				if row, ok := wards[id]; ok {
 					if clockKnown {
@@ -197,7 +200,7 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 			return nil
 		}
 		next = p.Tick + uint32(math.Max(1, math.Floor(0.25/interval)))
-		gt, ok := gameClock(tick, interval, rules)
+		gt, ok := current.now()
 		if !ok {
 			return nil
 		}
@@ -244,11 +247,13 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 		summary["states"] = samples
 		return nil
 	})
-	p.Callbacks.OnCMsgDOTACombatLogEntry(func(m *dota.CMsgDOTACombatLogEntry) error {
-		if !m.GetIsAttackerHero() && !m.GetIsTargetHero() && m.GetType() != dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_BUYBACK {
-			return nil
-		}
-		if rules == nil || m.Timestamp == nil {
+	type pendingCombat struct {
+		entry *dota.CMsgDOTACombatLogEntry
+		tick  uint32
+	}
+	pending := []pendingCombat{}
+	flushCombat := func() error {
+		if rules == nil {
 			return nil
 		}
 		start, ok := numeric(rules.Get("m_pGameRules.m_flGameStartTime")).(float64)
@@ -256,13 +261,58 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 			return nil
 		}
 		lookup := func(i uint32) string { n, _ := p.LookupStringByIndex("CombatLogNames", int32(i)); return n }
-		r := Row{"t": float64(m.GetTimestamp()) - start, "tick": p.Tick, "type": m.GetType().String(), "attacker": lookup(m.GetAttackerName()), "target": lookup(m.GetTargetName()), "inflictor": lookup(m.GetInflictorName()), "value": m.GetValue(), "health": m.GetHealth(), "attacker_illusion": m.GetIsAttackerIllusion(), "target_illusion": m.GetIsTargetIllusion(), "target_hero": m.GetIsTargetHero(), "attacker_hero": m.GetIsAttackerHero(), "visibility_scope": "combat_event", "attacker_team": m.GetAttackerTeam(), "target_team": m.GetTargetTeam(), "visible_radiant": m.IsVisibleRadiant, "visible_dire": m.IsVisibleDire, "stun_duration": m.StunDuration, "silence": m.SilenceModifier, "root": m.RootModifier, "location_x": m.LocationX, "location_y": m.LocationY}
-		if err := encode(events, r); err != nil {
-			return err
+		for _, event := range pending {
+			row := combatRow(event.entry, event.tick, start, lookup)
+			current.observeEnd(row)
+			if err := encode(events, row); err != nil {
+				return err
+			}
+			nevents++
 		}
-		nevents++
+		clear(pending)
+		pending = pending[:0]
 		summary["events"] = nevents
 		return nil
+	}
+	// Combat timestamps can precede availability of game start time. Retain
+	// those facts until the existing clock formula can produce negative times.
+	p.Callbacks.OnCDemoPacket(func(_ *dota.CDemoPacket) error { return flushCombat() })
+	p.Callbacks.OnCMsgDOTACombatLogEntry(func(m *dota.CMsgDOTACombatLogEntry) error {
+		if !keepCombatEntry(m) || m.Timestamp == nil {
+			return nil
+		}
+		pending = append(pending, pendingCombat{m, p.Tick})
+		return flushCombat()
 	})
+
 	return &summary
+}
+
+// Keep hero observations and a bounded set of economy/objective facts.
+func keepCombatEntry(m *dota.CMsgDOTACombatLogEntry) bool {
+	if m.GetIsAttackerHero() || m.GetIsTargetHero() {
+		return true
+	}
+	switch m.GetType() {
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_BUYBACK:
+		return true
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_PURCHASE:
+		return true
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_GOLD:
+		return true
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_XP:
+		return true
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_PLAYERSTATS:
+		return true
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_TEAM_BUILDING_KILL:
+		return true
+	case dota.DOTA_COMBATLOG_TYPES_DOTA_COMBATLOG_FIRST_BLOOD:
+		return true
+	}
+	return false
+}
+
+func combatRow(m *dota.CMsgDOTACombatLogEntry, tick uint32, start float64, lookup func(uint32) string) Row {
+	r := Row{"t": float64(m.GetTimestamp()) - start, "tick": tick, "type": m.GetType().String(), "attacker": lookup(m.GetAttackerName()), "target": lookup(m.GetTargetName()), "inflictor": lookup(m.GetInflictorName()), "value": m.GetValue(), "value_name": lookup(m.GetValue()), "last_hits": m.LastHits, "networth": m.Networth, "gpm": m.Gpm, "xpm": m.Xpm, "gold_reason": m.GoldReason, "xp_reason": m.XpReason, "building_type": m.BuildingType, "is_target_building": m.IsTargetBuilding, "health": m.GetHealth(), "attacker_illusion": m.GetIsAttackerIllusion(), "target_illusion": m.GetIsTargetIllusion(), "target_hero": m.GetIsTargetHero(), "attacker_hero": m.GetIsAttackerHero(), "visibility_scope": "combat_event", "attacker_team": m.GetAttackerTeam(), "target_team": m.GetTargetTeam(), "visible_radiant": m.IsVisibleRadiant, "visible_dire": m.IsVisibleDire, "stun_duration": m.StunDuration, "silence": m.SilenceModifier, "root": m.RootModifier, "location_x": m.LocationX, "location_y": m.LocationY}
+	return r
 }

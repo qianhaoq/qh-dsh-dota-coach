@@ -164,14 +164,40 @@ func run(args []string) (err error) {
 		return err
 	}
 	defer wardOutput.Close()
-	tactical := registerTactical(p, states, events, wardOutput, encode)
+	metadata, err := os.Create(filepath.Join(trace, "metadata.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer metadata.Close()
+	metadataRows := []Row{}
+	var matchID uint64
+	p.Callbacks.OnCDOTAMatchMetadataFile(func(m *dota.CDOTAMatchMetadataFile) error {
+		row := matchMetadataRow(m)
+		if id := m.GetMatchId(); id != 0 {
+			if matchID != 0 && matchID != id {
+				return errors.New("conflicting match metadata IDs")
+			}
+			matchID = id
+		}
+		metadataRows = append(metadataRows, row)
+		return nil
+	})
+	clock := &matchClock{interval: 1.0 / 30, basis: newClockBasis()}
+	tactical := registerTactical(p, states, events, wardOutput, encode, clock)
+	heroKeys := map[int]string{}
 	entities := map[string]*manta.Entity{}
 	wards := map[string]Row{}
 	objectives := map[string]bool{}
 	var resource *manta.Entity
 	samples, nwards, nobj := 0, 0, 0
 	nextTick := uint32(0)
-	t := func() float64 { return float64(p.Tick) / 30 }
+	t := func() interface{} {
+		value, known := clock.now()
+		if !known {
+			return nil
+		}
+		return value
+	}
 	identity := func(e *manta.Entity) string { return fmt.Sprintf("%d:%d", e.GetIndex(), e.GetSerial()) }
 	p.OnEntity(func(e *manta.Entity, op manta.EntityOp) error {
 		name, id := e.GetClassName(), identity(e)
@@ -233,7 +259,7 @@ func run(args []string) (err error) {
 
 			objectives[id] = true
 			nobj++
-			return encode(osf, Row{"t": t(), "what": name, "building_id": building, "entity_id": id})
+			return encode(osf, objectiveRow(clock.now, name, building, id))
 		}
 		return nil
 	})
@@ -249,6 +275,11 @@ func run(args []string) (err error) {
 				if ok && handle != 16777215 {
 					if hero := p.FindEntityByHandle(uint64(handle)); hero != nil {
 						selected[identity(hero)] = true
+						if index, ok := hero.GetInt32("m_iUnitNameStringTableIndex"); ok {
+							if key, ok := p.LookupStringByIndex("UnitNames", index); ok && strings.HasPrefix(key, "npc_dota_hero_") {
+								heroKeys[i] = key
+							}
+						}
 					}
 				}
 			}
@@ -283,7 +314,17 @@ func run(args []string) (err error) {
 	if err = p.Start(); err != nil {
 		return err
 	}
-	return emit(Row{"ok": true, "trace_version": tacticalVersion, "tactical": *tactical, "samples": samples, "wards": nwards, "objectives": nobj, "ticks": p.Tick, "sample_every_ticks": every, "clock": "demo_tick_30hz_requires_calibration", "bytes": st.Size(), "output_bytes": total, "ms": time.Since(started).Milliseconds()})
+	for _, row := range metadataRows {
+		attachMetadataHeroes(row, heroKeys)
+		if err := encode(metadata, row); err != nil {
+			return err
+		}
+	}
+	summary := Row{"ok": true, "trace_version": tacticalVersion, "tactical": *tactical, "samples": samples, "wards": nwards, "objectives": nobj, "ticks": p.Tick, "sample_every_ticks": every, "clock": clock.basis, "bytes": st.Size(), "output_bytes": total, "ms": time.Since(started).Milliseconds()}
+	if matchID != 0 {
+		summary["match_id"] = matchID
+	}
+	return emit(summary)
 }
 func classify(selected, hasSelection bool, cloneValue interface{}) string {
 	if clone, ok := cloneValue.(bool); ok && clone {
