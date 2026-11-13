@@ -35,3 +35,22 @@ or cosmetics). It includes team/slot identifiers, net worth graph values,
 camps stacked, item purchases, and inventory stat snapshots. These graphs and
 snapshots are metadata observations, not combat-log exact times; their native
 purchase/game times are preserved without applying the event clock formula.
+
+Trace version 4 adds public `match_id` from `CDOTAMatchMetadataFile` to metadata
+rows and the successful extraction summary (omitted when absent/zero; conflicting
+IDs fail extraction). Player `hero_key` is the official `npc_dota_hero_*` unit key,
+joined by `game_player_id` to PlayerResource's selected hero handle and UnitNames;
+`hero_identity_source` records that join. Unresolved heroes have `hero_key: null`.
+The match metadata player proto has no general hero ID; its ability-draft facet
+ID is not used as the played hero's identity.
+
+All entity trace `t` fields, including objectives, use the same pause-adjusted
+server clock as tactical states. Unknown clock values are null. Combat `t` uses
+the already pause-adjusted combat timestamp minus game start. The summary's
+`clock` object records `name`, `unit`, `zero` (horn/game start), `pregame`,
+`entity_formula`, `combat_formula`, `pause_handling`, `pause_observed`,
+`total_paused_ticks`, and `game_end`. When rules are observed it also records
+`tick_interval` and `game_start_time`. Unknown pause/end observations are null.
+A known `game_end` contains `t`, `source`, and `target`, taken only from a fort
+`DOTA_COMBATLOG_TEAM_BUILDING_KILL`; tower kills do not establish game end.
+Native metadata graph, purchase, and snapshot times keep their original meaning.

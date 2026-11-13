@@ -19,5 +19,22 @@ func matchMetadataRow(m *dota.CDOTAMatchMetadataFile) Row {
 			players = append(players, Row{"player_slot": p.PlayerSlot, "dota_team": team.DotaTeam, "team_number": p.TeamNumber, "team_slot": p.TeamSlot, "game_player_id": p.GamePlayerId, "graph_net_worth": p.GetGraphNetWorth(), "camps_stacked": p.CampsStacked, "items": items, "inventory_snapshots": snapshots})
 		}
 	}
-	return Row{"source": "demo match metadata", "timing": "metadata graphs and snapshots; not combat-log exact times", "players": players}
+	row := Row{"source": "demo match metadata", "timing": "metadata graphs and snapshots; not combat-log exact times", "players": players}
+	if id := m.GetMatchId(); id != 0 {
+		row["match_id"] = id
+	}
+	return row
+}
+
+// Only selected hero unit keys are joined; missing identity remains unknown.
+func attachMetadataHeroes(row Row, keys map[int]string) {
+	for _, player := range row["players"].([]Row) {
+		player["hero_key"] = nil
+		if id, ok := player["game_player_id"].(*int32); ok && id != nil {
+			if hero := keys[int(*id)]; hero != "" {
+				player["hero_key"] = hero
+				player["hero_identity_source"] = "player_resource_selected_handle"
+			}
+		}
+	}
 }

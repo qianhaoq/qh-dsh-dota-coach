@@ -28,15 +28,18 @@ func TestDecodeAtomicLimitAndFormats(t *testing.T) {
 	enc, _ := zstd.NewWriter(nil)
 	compressed := enc.EncodeAll(raw, nil)
 	enc.Close()
-	for name, data := range map[string][]byte{"dem": raw, "zstd": compressed} {
+	for name, data := range map[string][]byte{"dem": raw, "zstd": compressed, "misnamed.dem.bz2": compressed, "download": compressed} {
 		t.Run(name, func(t *testing.T) {
-			out := filepath.Join(dir, name)
+			out := filepath.Join(dir, name+"-out")
 			os.MkdirAll(out, 0700)
-			src := filepath.Join(dir, name+".input")
+			src := filepath.Join(dir, name)
 			os.WriteFile(src, data, 0600)
 			path, meta, err := decode(src, out, 1000)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if name != "dem" && meta["format"] != "zstd" {
+				t.Fatal(meta)
 			}
 			if meta["bytes"] != int64(len(raw)) {
 				t.Fatal(meta)
@@ -49,7 +52,7 @@ func TestDecodeAtomicLimitAndFormats(t *testing.T) {
 	}
 	out := filepath.Join(dir, "limited")
 	os.MkdirAll(out, 0700)
-	src := filepath.Join(dir, "zstd.input")
+	src := filepath.Join(dir, "zstd")
 	_, _, err := decode(src, out, 20)
 	if err == nil {
 		t.Fatal("size limit accepted")
@@ -107,5 +110,41 @@ func TestControlBitsAndUnknownFieldsStayDistinct(t *testing.T) {
 	}
 	if numeric(float64(math.Inf(1))) != nil {
 		t.Fatal("infinite number accepted")
+	}
+}
+
+func TestObjectiveClockUsesPausedMatchTime(t *testing.T) {
+	// Demo tick deliberately differs from server tick; completed and active
+	// pauses must both be excluded, and horn time must be subtracted.
+	const demoTick = 15000
+	for _, serverTick := range []uint32{11000, 11100} {
+		row := objectiveRow(func() (float64, bool) {
+			return clockFromTicks(serverTick, 1.0/30, 200, 60, true, 10900)
+		}, "tower", "npc_dota_badguys_tower4", "1:1")
+		want := float64(10900-60)/30 - 200
+		if math.Abs(row["t"].(float64)-want) > 0.00001 || row["t"] == float64(demoTick)/30 {
+			t.Fatal(row)
+		}
+	}
+	row := objectiveRow(func() (float64, bool) { return 0, false }, "tower", "building", "1:1")
+	if row["t"] != nil {
+		t.Fatal("unknown clock invented citation time", row)
+	}
+}
+
+func TestClockEndRequiresFortBuildingKill(t *testing.T) {
+	c := &matchClock{basis: newClockBasis()}
+	for _, row := range []Row{
+		{"type": "DOTA_COMBATLOG_TEAM_BUILDING_KILL", "target": "npc_dota_badguys_tower4", "t": 1900.0},
+		{"type": "DOTA_COMBATLOG_DEATH", "target": "npc_dota_badguys_fort", "t": 1901.0},
+	} {
+		c.observeEnd(row)
+	}
+	if c.basis["game_end"] != nil {
+		t.Fatal(c.basis)
+	}
+	c.observeEnd(Row{"type": "DOTA_COMBATLOG_TEAM_BUILDING_KILL", "target": "npc_dota_badguys_fort", "t": 1906.767})
+	if c.basis["game_end"].(Row)["t"] != 1906.767 {
+		t.Fatal(c.basis)
 	}
 }

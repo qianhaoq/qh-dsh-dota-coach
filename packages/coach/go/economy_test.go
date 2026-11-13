@@ -58,8 +58,11 @@ func TestCombatRowNamesAndPresence(t *testing.T) {
 }
 
 func TestMatchMetadataAllowlist(t *testing.T) {
-	m := &dota.CDOTAMatchMetadataFile{PrivateMetadata: []byte("PRIVATE_SENTINEL"), Metadata: &dota.CDOTAMatchMetadata{Teams: []*dota.CDOTAMatchMetadata_Team{{DotaTeam: proto.Uint32(2), Players: []*dota.CDOTAMatchMetadata_Team_Player{{PlayerSlot: proto.Uint32(0), TeamSlot: proto.Uint32(0), GamePlayerId: proto.Int32(0), GraphNetWorth: []float32{100, 200}, CampsStacked: proto.Uint32(2), Items: []*dota.CDOTAMatchMetadata_Team_ItemPurchase{{ItemId: proto.Int32(42), PurchaseTime: proto.Int32(-60)}}, InventorySnapshot: []*dota.CDOTAMatchMetadata_Team_InventorySnapshot{{GameTime: proto.Int32(600), LastHits: proto.Uint32(80), ItemId: []int32{999999}}}}}}, {}}}}
+	m := &dota.CDOTAMatchMetadataFile{MatchId: proto.Uint64(9080127650), PrivateMetadata: []byte("PRIVATE_SENTINEL"), Metadata: &dota.CDOTAMatchMetadata{Teams: []*dota.CDOTAMatchMetadata_Team{{DotaTeam: proto.Uint32(2), Players: []*dota.CDOTAMatchMetadata_Team_Player{{PlayerSlot: proto.Uint32(0), TeamSlot: proto.Uint32(0), GamePlayerId: proto.Int32(0), GraphNetWorth: []float32{100, 200}, CampsStacked: proto.Uint32(2), Items: []*dota.CDOTAMatchMetadata_Team_ItemPurchase{{ItemId: proto.Int32(42), PurchaseTime: proto.Int32(-60)}}, InventorySnapshot: []*dota.CDOTAMatchMetadata_Team_InventorySnapshot{{GameTime: proto.Int32(600), LastHits: proto.Uint32(80), ItemId: []int32{999999}}}}}}, {}}}}
 	row := matchMetadataRow(m)
+	if row["match_id"] != uint64(9080127650) {
+		t.Fatal("missing match identity")
+	}
 	players := row["players"].([]Row)
 	if len(players) != 1 || len(players[0]["graph_net_worth"].([]float32)) != 2 {
 		t.Fatal(row)
@@ -76,7 +79,26 @@ func TestMatchMetadataAllowlist(t *testing.T) {
 	if !strings.Contains(string(b), `"game_time":600`) || !strings.Contains(string(b), `"purchase_time":-60`) {
 		t.Fatal(string(b))
 	}
+	if _, exists := matchMetadataRow(nil)["match_id"]; exists {
+		t.Fatal("invented match identity")
+	}
 	if len(matchMetadataRow(nil)["players"].([]Row)) != 0 {
 		t.Fatal("nil metadata")
+	}
+}
+
+func TestMetadataHeroIdentityJoin(t *testing.T) {
+	row := Row{"players": []Row{
+		{"player_slot": proto.Uint32(132), "game_player_id": proto.Int32(9)},
+		{"player_slot": proto.Uint32(0), "game_player_id": proto.Int32(0)},
+		{"game_player_id": (*int32)(nil)},
+	}}
+	attachMetadataHeroes(row, map[int]string{9: "npc_dota_hero_night_stalker", 0: "npc_dota_hero_lion"})
+	players := row["players"].([]Row)
+	if players[0]["hero_key"] != "npc_dota_hero_night_stalker" || players[1]["hero_key"] != "npc_dota_hero_lion" || players[2]["hero_key"] != nil {
+		t.Fatal(row)
+	}
+	if players[0]["hero_identity_source"] != "player_resource_selected_handle" {
+		t.Fatal(row)
 	}
 }

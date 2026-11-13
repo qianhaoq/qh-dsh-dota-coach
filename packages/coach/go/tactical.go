@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const tacticalVersion = 3
+const tacticalVersion = 4
 
 var camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
 
@@ -121,7 +121,7 @@ func handles(p *manta.Parser, e *manta.Entity, prefix string, count int) []Row {
 }
 
 // Visibility observations are valid at the event instant, never continuous vision.
-func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, encode func(io.Writer, Row) error) *Row {
+func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, encode func(io.Writer, Row) error, current *matchClock) *Row {
 	summary := Row{"version": tacticalVersion, "clock": "server_tick_pause_adjusted", "sample_seconds": 0.25, "visibility": "event_observations_or_entity_mask; unknown_between_observations", "cooldown_semantics": "remaining_seconds", "states": 0, "events": 0}
 	var rules, resource *manta.Entity
 	heroes := map[string]*manta.Entity{}
@@ -133,21 +133,24 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 	p.Callbacks.OnCSVCMsg_ServerInfo(func(m *dota.CSVCMsg_ServerInfo) error {
 		if m.GetTickInterval() > 0 {
 			interval = float64(m.GetTickInterval())
+			current.interval = interval
 		}
 		return nil
 	})
-	p.Callbacks.OnCNETMsg_Tick(func(m *dota.CNETMsg_Tick) error { tick = m.GetTick(); return nil })
+	p.Callbacks.OnCNETMsg_Tick(func(m *dota.CNETMsg_Tick) error { tick = m.GetTick(); current.tick = tick; return nil })
 	p.OnEntity(func(e *manta.Entity, op manta.EntityOp) error {
 		name := e.GetClassName()
 		if strings.Contains(strings.ToLower(name), "gamerules") {
 			rules = e
+			current.rules = e
+			current.now()
 		}
 		if strings.Contains(name, "PlayerResource") {
 			resource = e
 		}
 		if name == "CDOTA_NPC_Observer_Ward" || name == "CDOTA_NPC_Observer_Ward_TrueSight" {
 			id := fmt.Sprintf("%d:%d", e.GetIndex(), e.GetSerial())
-			gt, clockKnown := gameClock(tick, interval, rules)
+			gt, clockKnown := current.now()
 			if op.Flag(manta.EntityOpDeleted) {
 				if row, ok := wards[id]; ok {
 					if clockKnown {
@@ -197,7 +200,7 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 			return nil
 		}
 		next = p.Tick + uint32(math.Max(1, math.Floor(0.25/interval)))
-		gt, ok := gameClock(tick, interval, rules)
+		gt, ok := current.now()
 		if !ok {
 			return nil
 		}
@@ -259,7 +262,9 @@ func registerTactical(p *manta.Parser, states, events, wardOutput io.Writer, enc
 		}
 		lookup := func(i uint32) string { n, _ := p.LookupStringByIndex("CombatLogNames", int32(i)); return n }
 		for _, event := range pending {
-			if err := encode(events, combatRow(event.entry, event.tick, start, lookup)); err != nil {
+			row := combatRow(event.entry, event.tick, start, lookup)
+			current.observeEnd(row)
+			if err := encode(events, row); err != nil {
 				return err
 			}
 			nevents++
